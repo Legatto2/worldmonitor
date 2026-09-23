@@ -19,7 +19,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DISEASE_RSS_FEEDS, fetchRssItems, fetchWhoDonApi } from '../scripts/seed-disease-outbreaks.mjs';
+import {
+  DISEASE_RSS_FEEDS,
+  fetchDiseaseOutbreaks,
+  fetchRssItems,
+  fetchWhoDonApi,
+} from '../scripts/seed-disease-outbreaks.mjs';
 import {
   whoNormalizeItem,
   rssNormalizeItem,
@@ -240,6 +245,47 @@ test('headline-source items older than the lookback are dropped', () => {
   const outside = new Date(NOW - (HEADLINE_LOOKBACK_DAYS + 1) * 86_400_000).toUTCString();
   assert.equal(isReportableHeadline(headline('Cholera outbreak in DR Congo intensifying', { pubDate: inside }), NOW), true);
   assert.equal(isReportableHeadline(headline('Cholera outbreak in DR Congo intensifying', { pubDate: outside }), NOW), false);
+});
+
+// rssNormalizeItem falls back to "now" when pubDate is missing or unparseable;
+// that synthetic date must not make an undated headline look current.
+test('headline-source items without a real publication date are dropped', () => {
+  assert.equal(isReportableHeadline(headline('Cholera outbreak in DR Congo intensifying', { pubDate: '' }), NOW), false);
+  assert.equal(isReportableHeadline(headline('Cholera outbreak in DR Congo intensifying', { pubDate: 'not a date' }), NOW), false);
+});
+
+// End-to-end through the seeder's fetch path with every upstream stubbed, so
+// removing any headline filter from fetchDiseaseOutbreaks turns this red.
+test('fetchDiseaseOutbreaks publishes only reportable ECDC/CIDRAP headlines', async (t) => {
+  const recent = new Date(Date.now() - 2 * 86_400_000).toUTCString();
+  const stale = new Date(Date.now() - (HEADLINE_LOOKBACK_DAYS + 5) * 86_400_000).toUTCString();
+  const rss = (items) => `<?xml version="1.0"?><rss><channel>${items.map(([title, link, pubDate]) =>
+    `<item><title>${title}</title><link>${link}</link><description>d</description>${pubDate ? `<pubDate>${pubDate}</pubDate>` : ''}</item>`).join('')}</channel></rss>`;
+  const cidrapXml = rss([
+    ['Ebola outbreak in DR Congo tops 6,600 cases', 'https://www.cidrap.umn.edu/ebola/keep', recent],
+    // Its own disease/country pair, so disease+country dedup cannot hide it.
+    ['Quick takes: cholera outbreak in Haiti, polio vaccine trial', 'https://www.cidrap.umn.edu/cholera/roundup', recent],
+    ['Cholera outbreak in Sudan surges', 'https://www.cidrap.umn.edu/cholera/stale', stale],
+    ['Measles outbreak in Canada grows', 'https://www.cidrap.umn.edu/measles/undated', ''],
+    ['Tpoxx doesn’t improve on placebo in achieving key mpox outcomes', 'https://www.cidrap.umn.edu/mpox/trial', recent],
+  ]);
+  const ecdcXml = rss([['Mpox outbreak in Nigeria: epidemiological update', 'https://www.ecdc.europa.eu/en/mpox-nigeria', recent]]);
+
+  t.mock.method(globalThis, 'fetch', async (input) => {
+    const url = String(input);
+    if (url.startsWith('https://www.who.int/')) return new Response(JSON.stringify({ value: [] }), { status: 200 });
+    if (url.startsWith('https://www.cidrap.umn.edu/')) return new Response(cidrapXml, { status: 200 });
+    if (url.startsWith('https://www.ecdc.europa.eu/')) return new Response(ecdcXml, { status: 200 });
+    if (url.startsWith('https://tools.cdc.gov/')) return new Response(rss([]), { status: 200 });
+    return new Response('not found', { status: 404 });
+  });
+
+  const { outbreaks } = await fetchDiseaseOutbreaks();
+  const links = outbreaks.map((o) => o.sourceUrl).sort();
+  assert.deepEqual(links, [
+    'https://www.cidrap.umn.edu/ebola/keep',
+    'https://www.ecdc.europa.eu/en/mpox-nigeria',
+  ]);
 });
 
 // Avian flu coverage names turkey farms constantly; the bird must not geocode

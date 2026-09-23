@@ -228,6 +228,8 @@ export const HEADLINE_LOOKBACK_DAYS = 90;
 
 export function isReportableHeadline(outbreak, nowMs = Date.now()) {
   if (!HEADLINE_SOURCES.has(outbreak.sourceName)) return true;
+  // An undated item carries a "now" fallback that would pass the lookback.
+  if (outbreak._publishedAtIsSynthetic === true) return false;
   if (outbreak.disease === 'Unknown Disease' || !outbreak.countryCode) return false;
   return outbreak.publishedAt >= nowMs - HEADLINE_LOOKBACK_DAYS * 86_400_000;
 }
