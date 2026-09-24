@@ -1062,6 +1062,32 @@ The pause keys on input, not on whether anyone is watching, so input inside an e
 
 A viewer preference that starts live news and webcams as soon as their panels are visible instead of waiting for Play. It governs autoplay only; how long video keeps playing without input is the Idle Pause preference, and once an Idle Pause has happened it does not restart video on tab return or scroll-back either. A viewer who saved it before the Idle Pause preference existed is treated as never pausing until they choose a duration, which preserves what the preference used to imply. See also: Idle Pause.
 
+## Naval Vessel Classification
+
+### AIS-Only Contact
+
+A tracked vessel whose sole evidence of military character is its own broadcast activity code — no match against the named-vessel roster and no military signal in its identity.
+
+Such a contact is tracked because the activity code alone qualifies it, which makes that code load-bearing in two directions at once: it decides whether the vessel is followed at all, and it is the only thing the display can honestly say about it. A classifier that stops returning a value for the code silently stops tracking these contacts entirely, trading a wrong answer for no answer. Their confidence is the lowest tier, and their class is by definition unestablished. See also: Declared Military Activity, Known-Vessel Override.
+
+### Declared Military Activity
+
+A ship's own broadcast statement that it is engaged in military operations. It establishes what the vessel is doing, never what class of ship it is.
+
+The distinction is the whole point: activity is self-declared and generic, while class is a claim about the hull that only a roster record or a fleet report can support. Presenting declared activity as a class invents a fact no source supports, and it propagates — the invented class flows into order-of-battle counts, threat severity, cluster character, and every export a user keeps. The honest rendering shows the declared activity itself wherever a class would otherwise appear. See also: AIS-Only Contact, Stale Class Claim.
+
+### Known-Vessel Override
+
+A match against the named-vessel roster or a published fleet report, which outranks any classification derived from a ship's own broadcast.
+
+Precedence runs one way only — a roster match always wins, and broadcast-derived classification fills in only where no match exists. Broadcast-derived classification never carries a hull identifier, and a roster or fleet-report record for a combatant class always does. That asymmetry is what makes a supported combatant-class claim distinguishable from an unsupported one after the fact; it is not a property of every roster entry, because some non-combatant records omit the identifier too. See also: Declared Military Activity, Stale Class Claim.
+
+### Stale Class Claim
+
+A vessel classification replayed out of a persisted snapshot that the current classifier would no longer produce.
+
+Vessel snapshots outlive a deploy, so correcting a classifier reaches new readers immediately and returning readers only once their own snapshot ages out — from their seat the fix simply did not happen. Correcting the classifier is therefore only half the work: the rehydration path has to normalize the old claim too, and it can only do so safely against a signature no legitimate record can satisfy. The hull-identifier asymmetry under Known-Vessel Override is what supplies that signature here, which is why such a signature can only target the combatant classes that asymmetry actually covers. See also: Known-Vessel Override, Dark Ship.
+
 ## Flagged ambiguities
 
 - *"Pool"* had been used for both a labelled market category and the complete set of markets — these are distinct. A pool is always a labelled subset; the complete set has no pool and must be requested as an explicit union.
@@ -1072,3 +1098,4 @@ A viewer preference that starts live news and webcams as soon as their panels ar
 - *"Gate"* had been used for both the local pre-push Tiered Gate and the CI Deploy Gate — these are distinct. The Tiered Gate is a cacheable pre-flight that can be scoped or escalated on one machine; only the Deploy Gate decides mergeability, and only names on its required list count toward it.
 - *"Superseded"* qualifies two unrelated things. A Superseded Run is a change-proposal CI run replaced by a later push, and it is discarded on purpose. A Superseded Failure is a scheduled run's failure that a newer capture, by hand or by a later run, has since made moot, and it is an alarm that resolves itself. The first is about wasted capacity, the second about alert noise; never reason about one from the other.
 - *"Capability"* names two things. A Capability-Gated Deep Link is gated on an entitlement predicate the destination also renders on; a Brief URL is a bearer link where the token itself is the capability. Say "entitlement" for the first sense in prose and "Brief URL" for the second; avoid "capability URL".
+- *"Unknown"* as a vessel class names two different states — a contact that declared military activity but no hull class, and a contact with no class evidence at all. They are currently indistinguishable downstream and fold into the same non-combatant bucket. When it matters which one you mean, say "declared activity, class unestablished" for the first; never read the shared bucket as evidence of either.
