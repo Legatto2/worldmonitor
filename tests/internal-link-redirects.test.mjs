@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 
-import { buildCorpus } from '../scripts/build-crawlable-corpus.mjs';
+import { buildCorpus, GENERATED_DIRS } from '../scripts/build-crawlable-corpus.mjs';
 import { LEGAL_DOCUMENT_DIGESTS } from '../shared/legal.ts';
 
 // #8603. Googlebot follows an internal link as a crawl signal. A link that
@@ -37,19 +37,58 @@ function decodeHtmlAttribute(value) {
     .replaceAll('&amp;', '&');
 }
 
-/**
- * The query keys middleware strips with a 308. Re-derived from middleware.ts
- * rather than copied: a hand-copied list keeps passing after middleware adds a
- * key, which is exactly the silent-drift failure this gate exists to prevent.
- */
-function indexNoiseQueryKeys() {
+/** The quoted string literals inside a named middleware.ts array or Set. */
+function middlewareKeyList(declaration) {
   const source = readRepo('middleware.ts');
-  const block = source.match(/const INDEX_NOISE_QUERY_KEYS = new Set\(\[([\s\S]*?)\]\)/)?.[1];
-  assert.ok(block, 'INDEX_NOISE_QUERY_KEYS extraction from middleware.ts found nothing');
+  const block = source.match(new RegExp(`const ${declaration}[^[]*\\[([\\s\\S]*?)\\]`))?.[1];
+  assert.ok(block, `${declaration} extraction from middleware.ts found nothing`);
   const keys = [...block.matchAll(/'([^']+)'/g)].map((match) => match[1]);
-  assert.ok(keys.includes('utm_source'), `expected utm_source in ${JSON.stringify(keys)}`);
-  assert.ok(keys.includes('ref') && keys.includes('wm_referral'), `expected the referral keys in ${JSON.stringify(keys)}`);
+  assert.ok(keys.length > 0, `${declaration} extraction from middleware.ts found no keys`);
   return keys;
+}
+
+/**
+ * Every query shape crawlerCanonicalUrl() 308s away, re-derived from
+ * middleware.ts rather than copied. A hand-copied list keeps passing after
+ * middleware adds a key, which is the silent-drift failure this gate exists to
+ * prevent — and reading only the INDEX_NOISE_QUERY_KEYS literal inherited
+ * exactly that blindness for two of the four shapes:
+ *
+ *  - `noiseKeys`: the explicit Set (ref, wm_referral, and seven utm_*).
+ *  - `utmPrefix`: middleware also drops ANY key whose lowercase form starts
+ *    with `utm_`, so `utm_id` — a standard Google Ads param absent from the
+ *    Set — is a 308 the Set alone cannot see.
+ *  - `legacyRootKeys`: on pathname `/` only, any of lat/lon/zoom/view/
+ *    timeRange/layers/c/country/chokepoint rewrites the path to /dashboard.
+ *
+ * Each derivation asserts loudly rather than degrading to an empty rule, so a
+ * middleware refactor reds this file instead of quietly disarming it.
+ */
+function middlewareBotRedirectShapes() {
+  const source = readRepo('middleware.ts');
+  const noiseKeys = middlewareKeyList('INDEX_NOISE_QUERY_KEYS = new Set');
+  assert.ok(noiseKeys.includes('utm_source'), `expected utm_source in ${JSON.stringify(noiseKeys)}`);
+  assert.ok(
+    noiseKeys.includes('ref') && noiseKeys.includes('wm_referral'),
+    `expected the referral keys in ${JSON.stringify(noiseKeys)}`,
+  );
+  // Presence of the prefix test is the derivation: the rule below models it, and
+  // this fails the moment middleware stops applying it.
+  assert.match(
+    source,
+    /key\.toLowerCase\(\)\.startsWith\('utm_'\)/,
+    'middleware.ts no longer strips every utm_* key by prefix — re-derive the utmPrefix rule',
+  );
+  const legacyRootKeys = middlewareKeyList('LEGACY_DASHBOARD_ROOT_QUERY_KEYS');
+  for (const expected of ['lat', 'lon', 'zoom', 'country', 'chokepoint', 'layers']) {
+    assert.ok(legacyRootKeys.includes(expected), `expected ${expected} in ${JSON.stringify(legacyRootKeys)}`);
+  }
+  assert.match(
+    source,
+    /next\.pathname === '\/' && hasLegacyDashboardRootState/,
+    'middleware.ts no longer rewrites a legacy root deep link — re-derive the legacyRootKeys rule',
+  );
+  return { noiseKeys, utmPrefix: /^utm_/i, legacyRootKeys };
 }
 
 /** Variant dashboard hosts, re-derived from middleware VARIANT_HOST_MAP. */
@@ -71,11 +110,16 @@ const vercelConfig = JSON.parse(readRepo('vercel.json'));
  * tells every buyer the terms they accepted changed, so a link fix there has
  * to ride a real legal revision rather than an SEO pass. Only the
  * redirect-source rule is waived: an index-noise key or a bare variant host in
- * these documents still fails. Residual as of #8603: docs/terms.mdx and its zh
- * mirror link https://www.worldmonitor.app/docs, a 307 to /docs/documentation.
+ * these documents still fails. Residual as of #8603: docs/terms.mdx links
+ * https://www.worldmonitor.app/docs, a 307 to /docs/documentation.
+ *
+ * The four English paths only. shared/legal.ts records a digest for exactly
+ * those, and tests/legal-version.test.mts iterates the same keys, so the
+ * docs/zh/ mirrors carry no digest and no TERMS_VERSION coupling — waiving
+ * them would waive more than the stated premise justifies. docs/zh/terms.mdx
+ * was fixed in #8603 at no version cost.
  */
-const DIGEST_LOCKED_DOCS = new Set(Object.keys(LEGAL_DOCUMENT_DIGESTS)
-  .flatMap((doc) => [doc, doc.replace(/^docs\//, 'docs/zh/')]));
+const DIGEST_LOCKED_DOCS = new Set(Object.keys(LEGAL_DOCUMENT_DIGESTS));
 
 /**
  * Redirect `source` values that fire for a request to `host`. Vercel applies
@@ -131,19 +175,27 @@ function docsRoutes() {
     for (const entry of readdirSync(join(repoRoot, 'docs', relative), { withFileTypes: true })) {
       const child = relative === '.' ? entry.name : `${relative}/${entry.name}`;
       if (entry.isDirectory()) visit(child);
+      // Mintlify renders .md as well as .mdx: three methodology/* nav entries
+      // are .md-only, and reading .mdx alone reported them as 404.
       else if (entry.name.endsWith('.mdx')) files.add(child.slice(0, -'.mdx'.length));
+      else if (entry.name.endsWith('.md')) files.add(child.slice(0, -'.md'.length));
     }
   };
   visit('.');
   return new Set(navPages.filter((page) => files.has(page)).map((page) => `/docs/${page}`));
 }
 
-/** Astro blog routes: the two index pages plus one route per post and per glossary term. */
+/** Astro blog routes: the index pages plus one route per post, author and glossary term. */
 function blogRoutes(manifest) {
-  const routes = new Set(['/blog/', '/blog/glossary/', '/blog/authors/elie-habib/']);
+  // `/blog` answers 200 without the trailing slash as well (probed).
+  const routes = new Set(['/blog', '/blog/', '/blog/glossary/']);
   for (const file of readdirSync(join(repoRoot, 'blog-site/src/content/blog'))) {
     if (file.endsWith('.md')) routes.add(`/blog/posts/${file.slice(0, -'.md'.length)}/`);
   }
+  // Each .astro under pages/authors/ is one static author route.
+  const authors = readdirSync(join(repoRoot, 'blog-site/src/pages/authors')).filter((file) => file.endsWith('.astro'));
+  assert.ok(authors.length > 0, 'blog author page extraction found nothing');
+  for (const file of authors) routes.add(`/blog/authors/${file.slice(0, -'.astro'.length)}/`);
   for (const route of manifest.sections.glossary.routes) routes.add(route);
   assert.ok(routes.size > 50, `blog route extraction found ${routes.size} routes`);
   return routes;
@@ -163,12 +215,29 @@ function appRoutes() {
   return routes;
 }
 
+/**
+ * Root static files Vercel serves straight out of public/, which is where the
+ * agent artifacts live and what they link to each other by (`/llms.txt`,
+ * `/world-monitor.md`, `/pricing.md`). Top level only: public/ also holds the
+ * generated corpus subtree, and folding a locally-built copy of that into the
+ * route set would make the 404 rule pass or fail on stale build state instead
+ * of on generatedRoutes(), which this run builds fresh.
+ */
+function publicFileRoutes() {
+  const files = readdirSync(join(repoRoot, 'public'), { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => `/${entry.name}`);
+  assert.ok(files.includes('/llms.txt'), 'public/ file extraction found no llms.txt');
+  return new Set(files);
+}
+
 function knownRoutes(outDir, manifest) {
   return new Set([
     ...generatedRoutes(outDir),
     ...docsRoutes(),
     ...blogRoutes(manifest),
     ...appRoutes(),
+    ...publicFileRoutes(),
   ]);
 }
 
@@ -197,21 +266,56 @@ function* corpusHrefs(outDir) {
 }
 
 /**
- * The four link defects, as a list of human-readable strings. Returned rather
- * than asserted per href so a red run names every offender at once instead of
- * one per re-run.
+ * Markdown links and raw anchors in an authored source file. Fenced and
+ * inline-code URLs are deliberately NOT matched: a fenced
+ * `https://tech.worldmonitor.app` in the WebMCP allow-list, or a `/tmp/x.json`
+ * in a shell example, is documentation OF a string, not a link to it, and
+ * rewriting it would falsify the document. That is also the structural limit of
+ * this gate — most of the harvested 404 family in #8602 came out of fences,
+ * where Google synthesised a URL from a string that was never a link, so no
+ * build-time link rule can see them.
  */
-function linkViolations({ page, href, url }, { noiseKeys, hosts, routes, slashlessCorpusForms }) {
+function authoredLinkTargets(source) {
+  return [
+    ...[...source.matchAll(/\]\((https?:\/\/[^)\s]+|\/[^)\s]+)\)/g)].map((match) => match[1]),
+    ...[...source.matchAll(/<a\b[^>]*\bhref="([^"]+)"/g)].map((match) => decodeHtmlAttribute(match[1])),
+  ];
+}
+
+/**
+ * Every way a same-site href fails to answer 200, as human-readable strings.
+ * Returned rather than asserted per href so a red run names every offender at
+ * once instead of one per re-run.
+ *
+ * `waiveRedirectRule` exists only for the digest-locked legal set; every other
+ * rule still applies to it.
+ */
+function linkViolations({ page, href, url }, context, { waiveRedirectRule = false } = {}) {
+  const { shapes, hosts, routes, slashlessCorpusForms } = context;
   const violations = [];
   const where = `${page}: ${href}`;
-  const carried = noiseKeys.filter((key) => url.searchParams.has(key));
+  const keys = [...url.searchParams.keys()];
+
+  const carried = keys.filter((key) => shapes.noiseKeys.includes(key));
   if (carried.length > 0) {
     violations.push(`${where} — carries index-noise query key(s) ${carried.join(', ')} (middleware 308s them away)`);
+  }
+  // Separate from the Set above so the message names the reason: middleware
+  // drops utm_* by prefix, so a key absent from the Set is still a 308.
+  const prefixed = keys.filter((key) => shapes.utmPrefix.test(key) && !shapes.noiseKeys.includes(key));
+  if (prefixed.length > 0) {
+    violations.push(`${where} — carries utm_* query key(s) ${prefixed.join(', ')} that middleware strips by prefix`);
+  }
+  if (url.pathname === '/') {
+    const legacy = keys.filter((key) => shapes.legacyRootKeys.includes(key));
+    if (legacy.length > 0) {
+      violations.push(`${where} — legacy root deep link (${legacy.join(', ')}) 308s to /dashboard; link /dashboard directly`);
+    }
   }
   if (hosts.includes(url.hostname) && (url.pathname === '/' || url.pathname === '')) {
     violations.push(`${where} — links a bare variant host (308 to /dashboard); link the /dashboard path directly`);
   }
-  if (literalRedirectSourcesFor(url.hostname).has(url.pathname)) {
+  if (!waiveRedirectRule && literalRedirectSourcesFor(url.hostname).has(url.pathname)) {
     violations.push(`${where} — equals a vercel.json redirect source, so it never answers 200`);
   }
   if (slashlessCorpusForms.has(url.pathname)) {
@@ -219,79 +323,128 @@ function linkViolations({ page, href, url }, { noiseKeys, hosts, routes, slashle
   }
   // Variant and api hosts serve a different application from a different
   // route table, so only www hrefs are resolved against the www route set.
-  if (url.hostname === 'www.worldmonitor.app' && !routes.has(url.pathname)) {
+  if (url.hostname === 'www.worldmonitor.app' && modelsRoutesUnder(url.pathname) && !routes.has(url.pathname)) {
     violations.push(`${where} — resolves to no published route (404)`);
   }
   return violations;
 }
 
-describe('internal links never redirect or 404 (#8603)', () => {
-  it('publishes no corpus href that redirects, 404s, or carries index noise', async () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'wm-internal-links-'));
-    try {
-      const manifest = await buildCorpus({ rootDir: repoRoot, outDir, baseUrl: WWW_ORIGIN });
-      const routes = knownRoutes(outDir, manifest);
-      const slashlessCorpusForms = new Set([...generatedRoutes(outDir)]
-        .filter((route) => route.endsWith('/') && route !== '/')
-        .map((route) => route.slice(0, -1)));
-      const context = { noiseKeys: indexNoiseQueryKeys(), hosts: variantHosts(), routes, slashlessCorpusForms };
+/**
+ * Whether the route set above is COMPLETE for this path, which is the
+ * precondition for calling a miss a 404. It is complete for the generated
+ * corpus families (built fresh in this run), for `/blog/*` (derived from the
+ * Astro content and page dirs) and for `/docs/<page>` (docs.json nav
+ * intersected with the .md/.mdx files on disk).
+ *
+ * Everything else is skipped, because the model genuinely does not know it and
+ * a miss there is a false positive, not a defect. Each of these was verified
+ * live at 200 while the first draft of this rule reported it as a 404:
+ *
+ *  - `/api/*` handlers (/api/product-catalog), `/.well-known/*`, `/legal/*.pdf`
+ *  - `/openapi.yaml`, `/openapi.json`, and other root assets outside public/
+ *  - `/docs/api-reference/**`, which Mintlify generates from the OpenAPI specs
+ *    rather than from a page file
+ *  - anything with a file extension, including the `/:path.md` twin rewrite
+ *    (/docs/terms.md) and /docs/changelog/rss.xml
+ */
+function modelsRoutesUnder(pathname) {
+  if (/\.[a-z0-9]+$/i.test(pathname)) return false;
+  if (pathname.startsWith('/docs/api-reference/')) return false;
+  if (pathname.startsWith('/docs/')) return true;
+  if (pathname === '/blog' || pathname.startsWith('/blog/')) return true;
+  return GENERATED_DIRS.some((dir) => pathname === `/${dir}` || pathname.startsWith(`/${dir}/`));
+}
 
-      const violations = [];
-      let scanned = 0;
-      for (const href of corpusHrefs(outDir)) {
-        scanned += 1;
-        violations.push(...linkViolations(href, context));
-      }
-      // A floor, because the scan must not silently cover nothing: the corpus
-      // publishes thousands of same-site anchors across ~280 pages.
-      assert.ok(scanned > 5000, `expected the whole corpus to be scanned, saw ${scanned} same-site hrefs`);
-      // Deduplicated by shape so 196 identical country CTAs read as one line.
-      const unique = [...new Set(violations.map((line) => line.replace(/^[^:]+: /, '')))];
-      assert.deepEqual(
-        unique,
-        [],
-        `${violations.length} internal links do not answer 200:\n${unique.slice(0, 40).join('\n')}`,
-      );
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
-    }
+/**
+ * One corpus build shared by every case here. buildCorpus() is the expensive
+ * step and all three cases need the route set it produces, so it runs once.
+ */
+let fixture = null;
+async function corpusFixture() {
+  if (fixture) return fixture;
+  const outDir = mkdtempSync(join(tmpdir(), 'wm-internal-links-'));
+  const manifest = await buildCorpus({ rootDir: repoRoot, outDir, baseUrl: WWW_ORIGIN });
+  fixture = {
+    outDir,
+    context: {
+      shapes: middlewareBotRedirectShapes(),
+      hosts: variantHosts(),
+      routes: knownRoutes(outDir, manifest),
+      slashlessCorpusForms: new Set([...generatedRoutes(outDir)]
+        .filter((route) => route.endsWith('/') && route !== '/')
+        .map((route) => route.slice(0, -1))),
+    },
+  };
+  return fixture;
+}
+
+describe('internal links never redirect or 404 (#8603)', () => {
+  after(() => {
+    if (fixture) rmSync(fixture.outDir, { recursive: true, force: true });
+    fixture = null;
   });
 
-  it('publishes no docs or blog source link that redirects or carries index noise', () => {
-    const noiseKeys = indexNoiseQueryKeys();
-    const hosts = variantHosts();
-    const sources = [];
+  it('publishes no corpus href that redirects, 404s, or carries index noise', async () => {
+    const { outDir, context } = await corpusFixture();
+    const violations = [];
+    let scanned = 0;
+    for (const href of corpusHrefs(outDir)) {
+      scanned += 1;
+      violations.push(...linkViolations(href, context));
+    }
+    // A floor, because the scan must not silently cover nothing: the corpus
+    // publishes thousands of same-site anchors across ~280 pages.
+    assert.ok(scanned > 5000, `expected the whole corpus to be scanned, saw ${scanned} same-site hrefs`);
+    // Deduplicated by shape so 196 identical country CTAs read as one line.
+    const unique = [...new Set(violations.map((line) => line.replace(/^[^:]+: /, '')))];
+    assert.deepEqual(
+      unique,
+      [],
+      `${violations.length} internal links do not answer 200:\n${unique.slice(0, 40).join('\n')}`,
+    );
+  });
+
+  it('publishes no docs, blog or agent-artifact link that redirects or 404s', async () => {
+    const { context } = await corpusFixture();
+    const docs = [];
     const published = docsRoutes();
     const visit = (relative) => {
       for (const entry of readdirSync(join(repoRoot, 'docs', relative), { withFileTypes: true })) {
         const child = relative === '.' ? entry.name : `${relative}/${entry.name}`;
         if (entry.isDirectory()) visit(child);
         else if (entry.name.endsWith('.mdx') && published.has(`/docs/${child.slice(0, -'.mdx'.length)}`)) {
-          sources.push([`docs/${child}`, readRepo(`docs/${child}`)]);
+          docs.push(`docs/${child}`);
         }
       }
     };
     visit('.');
-    for (const file of readdirSync(join(repoRoot, 'blog-site/src/content/blog'))) {
-      if (file.endsWith('.md')) sources.push([`blog-site/src/content/blog/${file}`, readRepo(`blog-site/src/content/blog/${file}`)]);
-    }
-    assert.ok(sources.length > 200, `expected published docs and blog sources, saw ${sources.length}`);
+    const blog = readdirSync(join(repoRoot, 'blog-site/src/content/blog'))
+      .filter((file) => file.endsWith('.md'))
+      .map((file) => `blog-site/src/content/blog/${file}`);
+    // The root agent artifacts. public/llms.txt is hand-authored, and
+    // llms-full.txt's brief above `## Generated corpus` is hand-authored too
+    // (scripts/build-llms-full.mjs), so no regeneration will ever repair a bad
+    // link in them — this gate is the only thing that can. They are also the
+    // primary AI-crawler surface: llms.txt links world-monitor.md by name.
+    const artifacts = readdirSync(join(repoRoot, 'public'), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && /\.(?:md|txt)$/.test(entry.name))
+      .map((entry) => `public/${entry.name}`);
+    // Per surface, not a total: a single floor over the sum keeps passing if
+    // the blog moves to .mdx and its filter matches nothing.
+    assert.ok(docs.length > 200, `expected the published docs pages, saw ${docs.length}`);
+    assert.ok(blog.length > 40, `expected the blog posts, saw ${blog.length}`);
+    assert.ok(artifacts.length > 10, `expected the public agent artifacts, saw ${artifacts.length}`);
 
     const violations = [];
-    for (const [file, source] of sources) {
-      // Markdown links and raw anchors only. An inline-code or fenced origin
-      // string such as the WebMCP allow-list is documentation OF a host, not a
-      // link to it, and rewriting it would falsify the document.
-      const targets = [
-        ...[...source.matchAll(/\]\((https?:\/\/[^)\s]+|\/[^)\s]+)\)/g)].map((match) => match[1]),
-        ...[...source.matchAll(/<a\b[^>]*\bhref="([^"]+)"/g)].map((match) => decodeHtmlAttribute(match[1])),
-      ];
+    for (const file of [...docs, ...blog, ...artifacts]) {
+      const source = readRepo(file);
       // Mintlify resolves a root-relative link in an .mdx against the docs
       // base path, so `[Terms](/terms)` renders as href="/docs/terms" (probed
       // on www.worldmonitor.app/docs/dpa, 2026-09-24). Judging those against
       // the site root would report every one of them as a redirect it is not.
+      // A public/ artifact is served from the root, so it needs no such shift.
       const base = file.startsWith('docs/') ? `${WWW_ORIGIN}/docs/` : WWW_ORIGIN;
-      for (const target of targets) {
+      for (const target of authoredLinkTargets(source)) {
         let url;
         try {
           url = new URL(target.startsWith('/') ? `.${target}` : target, base);
@@ -299,23 +452,18 @@ describe('internal links never redirect or 404 (#8603)', () => {
           continue;
         }
         if (!/(^|\.)worldmonitor\.app$/.test(url.hostname)) continue;
-        const where = `${file}: ${target}`;
-        const carried = noiseKeys.filter((key) => url.searchParams.has(key));
-        if (carried.length > 0) violations.push(`${where} — carries index-noise query key(s) ${carried.join(', ')}`);
-        if (hosts.includes(url.hostname) && (url.pathname === '/' || url.pathname === '')) {
-          violations.push(`${where} — links a bare variant host (308 to /dashboard)`);
-        }
-        if (!DIGEST_LOCKED_DOCS.has(file) && literalRedirectSourcesFor(url.hostname).has(url.pathname)) {
-          violations.push(`${where} — equals a vercel.json redirect source, so it never answers 200`);
-        }
+        violations.push(...linkViolations(
+          { page: file, href: target, url },
+          context,
+          { waiveRedirectRule: DIGEST_LOCKED_DOCS.has(file) },
+        ));
       }
     }
-    assert.deepEqual(violations, [], `${violations.length} docs or blog links do not answer 200:\n${violations.join('\n')}`);
+    assert.deepEqual(violations, [], `${violations.length} docs, blog or artifact links do not answer 200:\n${violations.join('\n')}`);
   });
 
-  it('publishes no welcome-page href that redirects or carries index noise', () => {
-    const noiseKeys = indexNoiseQueryKeys();
-    const hosts = variantHosts();
+  it('publishes no welcome-page href that redirects or 404s', async () => {
+    const { context } = await corpusFixture();
     const welcomeDir = join(repoRoot, 'pro-test/src/welcome');
     const files = readdirSync(welcomeDir).filter((file) => file.endsWith('.tsx'));
     assert.ok(files.length > 0, 'expected welcome section sources to scan');
@@ -323,10 +471,14 @@ describe('internal links never redirect or 404 (#8603)', () => {
     let scanned = 0;
     for (const file of files) {
       const source = readFileSync(join(welcomeDir, file), 'utf8');
-      // `${DASHBOARD_PATH}` is the one template hole in these hrefs; it always
-      // expands to a path, so substituting it keeps the URL parseable.
-      const targets = [...source.matchAll(/href[=:]\s*[{`'"]+((?:\$\{DASHBOARD_PATH\}|https:\/\/[a-z.]*worldmonitor\.app|\/)[^`'"\s]*)/g)]
-        .map((match) => match[1].replaceAll('${DASHBOARD_PATH}', '/dashboard'));
+      // DASHBOARD_PATH is the one template hole in these hrefs and always
+      // expands to a path, so substituting it keeps the URL parseable. Both
+      // spellings are matched: `href={DASHBOARD_PATH}` is the shape every CTA
+      // took once #8603 dropped its query, and requiring the interpolated
+      // `${DASHBOARD_PATH}` form alone made this scan skip all twelve of them.
+      const targets = [...source.matchAll(
+        /href[=:]\s*[{`'"]*((?:\$\{DASHBOARD_PATH\}|DASHBOARD_PATH|https:\/\/[a-z.]*worldmonitor\.app|\/)[^`'"\s,}]*)/g,
+      )].map((match) => match[1].replace(/^\$\{DASHBOARD_PATH\}|^DASHBOARD_PATH/, '/dashboard'));
       for (const target of targets) {
         let url;
         try {
@@ -336,18 +488,69 @@ describe('internal links never redirect or 404 (#8603)', () => {
         }
         if (!/(^|\.)worldmonitor\.app$/.test(url.hostname)) continue;
         scanned += 1;
-        const where = `pro-test/src/welcome/${file}: ${target}`;
-        const carried = noiseKeys.filter((key) => url.searchParams.has(key));
-        if (carried.length > 0) violations.push(`${where} — carries index-noise query key(s) ${carried.join(', ')}`);
-        if (hosts.includes(url.hostname) && (url.pathname === '/' || url.pathname === '')) {
-          violations.push(`${where} — links a bare variant host (308 to /dashboard)`);
-        }
-        if (literalRedirectSourcesFor(url.hostname).has(url.pathname)) {
-          violations.push(`${where} — equals a vercel.json redirect source, so it never answers 200`);
-        }
+        violations.push(...linkViolations(
+          { page: `pro-test/src/welcome/${file}`, href: target, url },
+          context,
+        ));
       }
     }
-    assert.ok(scanned >= 20, `expected the welcome CTAs to be scanned, saw ${scanned}`);
+    // Exact, not a floor: the twelve dashboard CTAs plus the other same-site
+    // hrefs these sections publish. A CTA that drops out of the scan — moved
+    // behind a helper, or re-pointed at a host this regex does not spell —
+    // reads as covered under a floor. tests/deploy-config.test.mjs pins the
+    // twelve dashboard CTAs by shape; this pins every welcome href by URL
+    // semantics, which is what catches a bare variant host or a redirect
+    // source that a tail-only shape check cannot see.
+    assert.equal(scanned, 32, `expected every welcome same-site href to be scanned, saw ${scanned}`);
     assert.deepEqual(violations, [], `${violations.length} welcome links do not answer 200:\n${violations.join('\n')}`);
+  });
+
+  // Positive control. Every rule above currently has nothing to catch, so
+  // without this the whole file would keep passing after a refactor silently
+  // disarmed one of them. Each case is a shape middleware really does 308,
+  // and the middle two are the ones a Set-only reading of
+  // INDEX_NOISE_QUERY_KEYS cannot see.
+  it('fires on every bot-308 and 404 shape it claims to cover', async () => {
+    const { context } = await corpusFixture();
+    const reasonFor = (href) => {
+      const url = new URL(href, WWW_ORIGIN);
+      return linkViolations({ page: 'probe', href, url }, context)
+        .map((line) => line.replace('probe: ', ''));
+    };
+    const cases = [
+      ['/dashboard?utm_source=x', /index-noise query key\(s\) utm_source/],
+      // Absent from the Set; middleware drops it by prefix. A standard Google
+      // Ads param, so this is the realistic drift case, not a contrived one.
+      ['/dashboard?utm_id=abc', /utm_\* query key\(s\) utm_id that middleware strips by prefix/],
+      // Legacy root deep link: pathname `/` plus any bounded map-state key.
+      ['/?country=US', /legacy root deep link \(country\)/],
+      ['https://tech.worldmonitor.app', /links a bare variant host/],
+      ['/docs', /equals a vercel\.json redirect source/],
+      ['/countries/norway', /slashless form of a slash-normalised corpus route/],
+      ['/countries/not-a-country/', /resolves to no published route \(404\)/],
+      ['/docs/not-a-page', /resolves to no published route \(404\)/],
+    ];
+    for (const [href, expected] of cases) {
+      const reasons = reasonFor(href);
+      assert.ok(
+        reasons.some((reason) => expected.test(reason)),
+        `${href} must be rejected by ${expected} — got ${JSON.stringify(reasons)}`,
+      );
+    }
+    // Negative control: the shapes that legitimately answer 200 must stay
+    // silent, or the rules above would pass by rejecting everything.
+    for (const href of [
+      '/dashboard',
+      '/dashboard?country=NO&expanded=1',
+      '/pro?wm_content_source=worldmonitor-use-cases',
+      'https://tech.worldmonitor.app/dashboard',
+      '/countries/norway/',
+      '/docs/algorithms',
+      '/blog/glossary/suez-canal/',
+      '/llms.txt',
+      '/api/product-catalog',
+    ]) {
+      assert.deepEqual(reasonFor(href), [], `${href} answers 200 and must not be rejected`);
+    }
   });
 });

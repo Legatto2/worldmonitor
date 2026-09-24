@@ -41,6 +41,8 @@ export const FirstFive = () => (
       <div className="text-center mt-10">
         <a
           href={DASHBOARD_PATH}
+          data-umami-event="welcome-cta"
+          data-umami-event-target="welcome-f5m"
           className="bg-wm-green text-wm-bg px-6 py-3 rounded-sm font-mono text-sm uppercase tracking-wider font-bold hover:bg-green-400 transition-colors inline-flex items-center gap-2"
         >
           {t('welcome.firstFive.cta')} <ArrowRight className="w-4 h-4" aria-hidden="true" />

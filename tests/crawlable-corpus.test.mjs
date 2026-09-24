@@ -7076,7 +7076,7 @@ describe('GEO residue #7869 (sources ItemList)', () => {
         dataCatalogLd,
         escapeHtml,
         pageDocument: ({ jsonLd, body, extraStyles }) => JSON.stringify({ jsonLd, body, extraStyles }),
-        },
+      },
     }));
   };
 

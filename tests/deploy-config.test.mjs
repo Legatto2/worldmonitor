@@ -4452,10 +4452,11 @@ describe('agent readiness: crawl-budget disallows (#7660)', () => {
     // the worst of both, and it moves the volume into "Blocked by robots.txt"
     // rather than removing it.
     //
-    // Shapes are the ones the corpus builders actually emit
-    // (scripts/build-crawlable-corpus.mjs withUtmSource, scripts/build-use-cases.mjs
-    // content attribution, scripts/crawlable-sources-page.mjs,
-    // scripts/build-research-reports.mjs).
+    // Shapes are the ones the corpus builders actually emit: the parameterised
+    // dashboard deep links in scripts/build-crawlable-corpus.mjs and
+    // scripts/build-research-reports.mjs, plus the wm_content_* attribution in
+    // scripts/build-use-cases.mjs. The utm_source wrapper that used to sit on
+    // top of those was deleted in #8603.
     // `/*?*lat=` is a substring match over the whole query, not a parameter-NAME
     // match: it also catches any param ending in the token (`?colon=` matches
     // `/*?*lon=`) and value-side text (`?q=flat=earth` matches `/*?*lat=`).

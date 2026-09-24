@@ -98,7 +98,12 @@ export const Moments = () => (
                   </span>
                 ))}
               </div>
-              <a href={href} className="font-mono text-xs text-wm-green hover:text-green-300 transition-colors">
+              <a
+                href={href}
+                data-umami-event="welcome-cta"
+                data-umami-event-target={`welcome-moment-${key}`}
+                className="font-mono text-xs text-wm-green hover:text-green-300 transition-colors"
+              >
                 {t(`welcome.moments.${key}.link`)}
               </a>
             </motion.article>
