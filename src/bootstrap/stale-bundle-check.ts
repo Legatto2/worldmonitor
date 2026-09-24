@@ -21,6 +21,7 @@
 // trigger retries the reload against the live DOM until one lands. What counts
 // as open is `isModalOpen`, shared with the service-worker updater.
 
+import { enqueueSentryCall } from '@/bootstrap/sentry-defer';
 import { isModalOpen, type ModalDocumentLike } from '@/utils/open-modal';
 
 interface EventTargetLike {
@@ -31,8 +32,13 @@ interface EventTargetLike {
 /**
  * The document surface this module needs: the visibility trigger AND the modal
  * probe. Extending the shared `ModalDocumentLike` rather than redeclaring it
- * keeps one definition of the modal contract, and makes a fake that omits
- * `querySelectorAll` a compile error instead of a swallowed TypeError.
+ * keeps one definition of the modal contract, so a fake cannot model a document
+ * that answers `visibilitychange` but not the modal probe.
+ *
+ * `querySelectorAll` is required rather than optional on purpose, but note the
+ * enforcement is weaker than it looks: `tsconfig.json` includes only `src`, and
+ * `tsconfig.contract-tests.json` does not list this module's suite, so no job
+ * typechecks the fake. A fake that omits it fails loudly at runtime instead.
  */
 interface DocumentLike extends ModalDocumentLike {
   addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => void;
@@ -55,6 +61,13 @@ interface StaleBundleCheckOptions {
   reload?: () => void;
   /** Override clock (for tests). Default: Date.now. */
   now?: () => number;
+  /**
+   * Called once per deferral episode when an open modal holds off a reload.
+   * Default reports to Sentry. A wedged tab (an overlay that never closes)
+   * would otherwise keep a stale bundle with no signal anywhere but the
+   * user's own console, which is the failure mode this suppression risks.
+   */
+  reportDeferral?: (currentHash: string, deployedHash: string) => void;
   /**
    * Minimum interval between checks. Multiple events within this window
    * collapse to one fetch.
@@ -114,6 +127,14 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
   const setIntervalImpl = options.setInterval ?? ((cb: () => void, ms: number) => globalThis.setInterval(cb, ms));
   const reload = options.reload ?? (() => window.location.reload());
   const now = options.now ?? Date.now;
+  const reportDeferral = options.reportDeferral ?? ((current: string, deployed: string) => {
+    enqueueSentryCall((Sentry) => {
+      Sentry.captureMessage('[stale-bundle] reload deferred, modal open', {
+        level: 'warning',
+        tags: { surface: 'stale-bundle', current_hash: current, deployed_hash: deployed },
+      });
+    });
+  });
   const minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
   const periodicIntervalMs = options.periodicIntervalMs ?? DEFAULT_PERIODIC_INTERVAL_MS;
 
@@ -149,6 +170,7 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
       if (pendingReload === null) {
         // eslint-disable-next-line no-console
         console.warn('[stale-bundle] reload deferred, modal open:', currentHash, '→', deployedHash);
+        reportDeferral(currentHash, deployedHash);
       }
       pendingReload = deployedHash;
       return;
@@ -160,10 +182,14 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
   };
 
   const check = async (): Promise<void> => {
-    // A mismatch is terminal knowledge: a deploy never un-deploys. Once the
-    // reload is owed, retry it against the live DOM instead of re-asking the
-    // network, and let it bypass the dedupe window — that window rate-limits
-    // fetches, and this path makes none.
+    // Treat a mismatch as terminal: retry the reload against the live DOM
+    // instead of re-asking the network, bypassing the dedupe window (that
+    // window rate-limits fetches, and this path makes none).
+    //
+    // One case makes the premise false: a rollback to exactly `currentHash`
+    // while a reload is pending. The cost is a single redundant reload onto
+    // the bundle already running, so re-verifying every trigger would buy
+    // nothing but requests.
     if (pendingReload !== null) {
       reloadOrDefer(pendingReload);
       return;
@@ -181,8 +207,9 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
       const res = await fetchImpl(`/build-hash.txt?t=${t}`, { cache: 'no-store' });
       if (res.ok) deployedHash = (await res.text()).trim();
     } catch {
-      // Offline, network error, or non-OK response — silently skip.
-      // The next trigger will retry.
+      // Offline, or a network error from fetch/res.text() — silently skip.
+      // A non-OK response never throws; it leaves `deployedHash` null and
+      // exits below. Either way the next trigger retries.
     } finally {
       inflight = false;
     }
