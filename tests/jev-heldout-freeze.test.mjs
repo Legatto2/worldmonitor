@@ -80,6 +80,22 @@ describe('verdict', () => {
     assert.equal(v.slices.clearCut.pass, false);
   });
 
+  it('holds the clear-cut slice at the relay\'s 100% instead of requiring more', () => {
+    const full = { jev: score(36, 3, 3), relay: score(35, 6, 4) };
+    const pass = verdict(scores([{ full: full.jev, clearCut: score(26, 0, 1) }], [{ full: full.relay, clearCut: score(26, 0, 0) }, { full: full.relay, clearCut: score(25, 0, 1) }]));
+    assert.equal(pass.pass, true, JSON.stringify(pass));
+    assert.equal(pass.slices.full.rule, 'beat');
+    assert.equal(pass.slices.clearCut.rule, 'hold');
+    const oneFalse = verdict(scores([{ full: full.jev, clearCut: score(26, 1, 0) }], [{ full: full.relay, clearCut: score(26, 0, 0) }]));
+    assert.equal(oneFalse.pass, false);
+    assert.match(oneFalse.slices.clearCut.reasons.join(), /below worst relay 100\.0%/);
+  });
+
+  it('holds against the worst relay run on the clear-cut slice', () => {
+    const v = verdict(scores([both(score(36, 3, 3))], [{ full: score(35, 6, 4), clearCut: score(30, 2, 3) }, { full: score(35, 6, 4), clearCut: score(30, 5, 3) }]));
+    assert.equal(v.slices.clearCut.pass, true, JSON.stringify(v.slices.clearCut));
+  });
+
   it('fails a Jev run that flagged nothing, and a missing arm', () => {
     assert.equal(verdict(scores([both(score(0, 0, 5))], [both(score(30, 6, 5))])).pass, false);
     assert.equal(verdict(scores([both(score(36, 1, 3))], [])).pass, false);

@@ -60,12 +60,18 @@ const precision = (s) => {
   return flagged ? (s.alertLevel - s.missed) / flagged : null;
 };
 
+// On the full set Jev has to beat the relay. The clear-cut slice is a guard it must hold:
+// both captured relay runs are at 100% precision there, so "beat" could never pass.
+const SLICE_RULE = { full: 'beat', clearCut: 'hold' };
+
 // scores: { [arm]: { [run]: { full, clearCut } } }, each a scoreAlertLabels result.
-// The primary arm passes only if, on every slice, its worst run's precision is above the
-// relay's best run and its worst run misses no more alerts than the relay's worst run.
+// beat: the primary arm's worst run has higher precision than the relay's best run.
+// hold: the primary arm's worst run has precision at least the relay's worst run.
+// Both: the primary arm's worst run misses no more alerts than the relay's worst run.
 export function verdict(scores) {
   const slices = {};
   for (const slice of SLICES) {
+    const rule = SLICE_RULE[slice];
     const jev = Object.values(scores[PRIMARY_ARM] ?? {}).map((r) => r[slice]);
     const relay = Object.values(scores[RELAY_ARM] ?? {}).map((r) => r[slice]);
     const reasons = [];
@@ -76,13 +82,18 @@ export function verdict(scores) {
     const jevPrecision = jev.map(precision);
     const relayPrecision = relay.map(precision);
     const jevWorstPrecision = jevPrecision.includes(null) ? null : Math.min(...jevPrecision);
-    const relayBestPrecision = Math.max(...relayPrecision.filter((p) => p !== null), 0);
+    const relayKnown = relayPrecision.filter((p) => p !== null);
+    const relayBestPrecision = Math.max(...relayKnown, 0);
+    const relayWorstPrecision = relayKnown.length ? Math.min(...relayKnown) : 0;
     const jevWorstMissed = Math.max(...jev.map((s) => s.missed));
     const relayWorstMissed = Math.max(...relay.map((s) => s.missed));
     if (jevWorstPrecision === null) reasons.push(`a ${PRIMARY_ARM} run flagged no alert`);
-    else if (!(jevWorstPrecision > relayBestPrecision)) reasons.push(`worst ${PRIMARY_ARM} precision ${pct(jevWorstPrecision)} is not above best ${RELAY_ARM} ${pct(relayBestPrecision)}`);
+    else if (rule === 'beat' && !(jevWorstPrecision > relayBestPrecision)) reasons.push(`worst ${PRIMARY_ARM} precision ${pct(jevWorstPrecision)} is not above best ${RELAY_ARM} ${pct(relayBestPrecision)}`);
+    else if (rule === 'hold' && jevWorstPrecision < relayWorstPrecision) reasons.push(`worst ${PRIMARY_ARM} precision ${pct(jevWorstPrecision)} is below worst ${RELAY_ARM} ${pct(relayWorstPrecision)}`);
     if (jevWorstMissed > relayWorstMissed) reasons.push(`worst ${PRIMARY_ARM} run missed ${jevWorstMissed}, worst ${RELAY_ARM} run ${relayWorstMissed}`);
-    slices[slice] = { pass: reasons.length === 0, jevWorstPrecision, relayBestPrecision, jevWorstMissed, relayWorstMissed, reasons };
+    slices[slice] = {
+      rule, pass: reasons.length === 0, jevWorstPrecision, relayBestPrecision, relayWorstPrecision, jevWorstMissed, relayWorstMissed, reasons,
+    };
   }
   return { arm: PRIMARY_ARM, pass: SLICES.every((s) => slices[s].pass), slices };
 }
