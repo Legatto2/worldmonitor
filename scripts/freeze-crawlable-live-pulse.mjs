@@ -681,13 +681,23 @@ function selectCountryHeadlines(digestItems, code, limit = COUNTRY_HEADLINE_LIMI
     .map((entry) => entry.row);
 }
 
-// Rows a brief may cite: the same title predicate the server grounding and
-// the MCP tool apply. Order is preserved, so citation indexes built over the
-// result stay aligned with the frozen sources.
-// Two captured evidence-grounded briefs with no citation between them is not
-// chance: every English brief is offered the country's CII, advisory and
-// resilience data points.
-const MIN_EVIDENCE_GATE_BRIEFS = 2;
+// Every English brief is offered the country's CII, advisory and resilience
+// data points, so a large sample citing none of them means the evidence pack
+// is down. A small sample can be Situation-only by chance (the model leaves
+// unsupported sections empty, and a mis-bound number is withheld); failing
+// on it would discard the whole snapshot, the failure an absolute floor on a
+// small, variable set already caused for the brief gate (#7620).
+export const MIN_EVIDENCE_GATE_BRIEFS = 10;
+
+/**
+ * What the freeze does about evidence-grounded briefs that cite no data
+ * point: 'fail' the run for a sample large enough to mean an outage,
+ * 'record' a capture error for a smaller one, or null when nothing is wrong.
+ */
+export function evidenceGateVerdict({ formatCount, citedCount }) {
+  if (formatCount === 0 || citedCount > 0) return null;
+  return formatCount >= MIN_EVIDENCE_GATE_BRIEFS ? 'fail' : 'record';
+}
 
 function evidenceFormatBriefs(countries) {
   return Object.entries(countries)
@@ -695,6 +705,9 @@ function evidenceFormatBriefs(countries) {
     .filter(({ brief }) => brief && Array.isArray(brief.evidence) && typeof brief.text === 'string');
 }
 
+// Rows a brief may cite: the same title predicate the server grounding and
+// the MCP tool apply. Order is preserved, so citation indexes built over the
+// result stay aligned with the frozen sources.
 function briefGroundingRows(rows) {
   return rows.filter((row) => isBriefRelevantTitle(row?.title));
 }
@@ -1441,12 +1454,16 @@ export async function freezeCrawlableLivePulse({
     // out), so the briefs still arrive, Situation-only, and every page renders
     // no brief block. Legacy-format responses (a server that predates the
     // evidence pack) do not engage this gate.
-    if (snapshot.coverage.briefEvidenceFormatCount >= MIN_EVIDENCE_GATE_BRIEFS
-      && snapshot.coverage.briefEvidenceCitedCount === 0) {
-      throw new Error(
-        `Pulse freeze: ${snapshot.coverage.briefEvidenceFormatCount} evidence-grounded briefs cited no World Monitor data point; `
-        + 'the evidence pack is unavailable',
-      );
+    const evidenceVerdict = evidenceGateVerdict({
+      formatCount: snapshot.coverage.briefEvidenceFormatCount,
+      citedCount: snapshot.coverage.briefEvidenceCitedCount,
+    });
+    const evidenceMessage = `${snapshot.coverage.briefEvidenceFormatCount} evidence-grounded briefs cited no World Monitor data point`;
+    if (evidenceVerdict === 'fail') {
+      throw new Error(`Pulse freeze: ${evidenceMessage}; the evidence pack is unavailable`);
+    }
+    if (evidenceVerdict === 'record') {
+      snapshot.errors.developments.push({ code: '*', stage: 'brief-evidence', message: evidenceMessage });
     }
     const minBriefs = minimumBriefCaptures(snapshot.coverage.briefMatchedCount);
     if (checkedBriefs < minBriefs) {

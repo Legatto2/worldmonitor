@@ -10,6 +10,8 @@ import {
   buildBriefContext,
   COUNTRY_DIGEST_VARIANTS,
   freezeCrawlableLivePulse,
+  evidenceGateVerdict,
+  MIN_EVIDENCE_GATE_BRIEFS,
   minimumBriefCaptures,
   mintSession,
   normalizeApiBase,
@@ -1784,14 +1786,14 @@ describe('freeze per-country developments capture', () => {
       )), JSON.stringify(snapshot.errors.developments));
     });
 
-    it('counts cited data points and fails the run when evidence-grounded briefs cite none', async () => {
+    it('counts cited data points and records a small uncited sample without discarding the snapshot', async () => {
       stubFetch({ digestItems: countryDigestItems(), briefOverrides: { SD: { brief: brief(), evidence: evidence() } } });
       const { snapshot } = await runFreeze({ serviceKey: 'test-key' });
       assert.equal(snapshot.coverage.briefEvidenceCitedCount, 1);
       assert.equal(snapshot.coverage.briefAnalysisCount, 1, 'Key risks is published beyond the Situation');
 
-      // Every evidence-grounded response came back with an empty pack: the
-      // pages would publish Situation-only briefs, which render no brief block.
+      // Two Situation-only briefs are an ordinary thin run, not proof the
+      // evidence pack is down: the snapshot is written and the gap recorded.
       stubFetch({
         digestItems: countryDigestItems(),
         briefOverrides: {
@@ -1799,7 +1801,20 @@ describe('freeze per-country developments capture', () => {
           NO: { brief: 'SITUATION NOW\nNorway opens new arctic port [1]', evidence: [] },
         },
       });
-      await assert.rejects(runFreeze({ serviceKey: 'test-key' }), /cited no World Monitor data point/);
+      const thin = await runFreeze({ serviceKey: 'test-key' });
+      assert.equal(thin.snapshot.coverage.briefEvidenceCitedCount, 0);
+      assert.ok(thin.snapshot.errors.developments.some((entry) => (
+        entry.stage === 'brief-evidence' && entry.message.includes('cited no World Monitor data point')
+      )), JSON.stringify(thin.snapshot.errors.developments));
+    });
+
+    it('fails the run only when a large evidence-grounded sample cites no data point', () => {
+      assert.equal(evidenceGateVerdict({ formatCount: MIN_EVIDENCE_GATE_BRIEFS, citedCount: 0 }), 'fail');
+      assert.equal(evidenceGateVerdict({ formatCount: MIN_EVIDENCE_GATE_BRIEFS - 1, citedCount: 0 }), 'record');
+      assert.equal(evidenceGateVerdict({ formatCount: 1, citedCount: 0 }), 'record');
+      assert.equal(evidenceGateVerdict({ formatCount: 117, citedCount: 1 }), null);
+      assert.equal(evidenceGateVerdict({ formatCount: 0, citedCount: 0 }), null, 'legacy-format responses do not engage the gate');
+      assert.ok(MIN_EVIDENCE_GATE_BRIEFS >= 10, 'a floor small enough for chance to trip discards whole snapshots (#7620)');
     });
 
     it('rejects a brief carrying a malformed evidence item', async () => {
