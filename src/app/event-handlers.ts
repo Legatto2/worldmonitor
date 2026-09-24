@@ -114,6 +114,7 @@ import { resolveGateAction, type PanelGateReason } from '@/services/panel-gating
 import { ExportGateControl } from '@/components/ExportGateControl';
 import { h, setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
 import { scheduleAfterFirstPaint } from '@/utils/after-paint';
+import { RELOAD_SAFE_ATTR } from '@/utils/open-modal';
 import {
   isAgentAnalyticsSuppressed,
   isAgentPanelViewSuppressed,
@@ -992,6 +993,12 @@ export class EventHandlerManager implements AppModule {
     popover.className = `mission-preset-popover${mobile ? ' mission-preset-popover--mobile' : ''}`;
     popover.setAttribute('role', 'dialog');
     popover.setAttribute('aria-label', 'Mission presets');
+    // Auto-opens after first paint for every preset-less user, and holds no
+    // entered state — it re-appears on the next load. Without this, the
+    // automatic reload guards treated it as work worth protecting and
+    // deferred stale-bundle reloads for a broad population
+    // (WORLDMONITOR-15X). Accessibility still sees a dialog.
+    popover.setAttribute(RELOAD_SAFE_ATTR, '');
     popover.tabIndex = -1;
 
     const cards = getMissionPresetsForVariant(SITE_VARIANT).map((preset) => {

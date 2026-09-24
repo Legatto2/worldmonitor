@@ -5,6 +5,8 @@
 
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { CHANNEL_PAGE_TIMEOUT_MS, fetchChannelLivePage, resolveChannelsLive } from './lib/live-video-channel-live.mjs';
+import { refreshChannels } from './lib/live-video-refresh.mjs';
 import { readLiveVideoSurfaces } from './lib/live-video-surfaces.mjs';
 import { isMainModule } from './lib/main-module.mjs';
 import { AUDIT_CANARIES, LIVE_NEWS_SOURCES, WEBCAM_GRID_PRIORITY, WEBCAM_SOURCES } from '../src/config/live-video-sources.ts';
@@ -20,6 +22,12 @@ export const ALONE_RECHECKS = 2;
 export const ALONE_RECHECK_BUDGET_MS = 8 * 60_000;
 /** The longest one alone check can take: a browser launch, the page and every poll. A check starts only if this still fits. */
 const ALONE_CHECK_MAX_MS = MAX_POLLS * LIVE_VIDEO_TIMING.pollMs + 15_000;
+/** No channel page fetch starts after this, so resolving channels takes at most this plus one page's worst case. */
+export const RESOLVE_BUDGET_MS = 3 * 60_000;
+/** Each channel page waits up to this for the proxy tunnel and again for the response (twice per page at worst). */
+export { CHANNEL_PAGE_TIMEOUT_MS };
+/** Channel pages fetched at once. */
+const RESOLVE_CONCURRENCY = 4;
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const INDENT = ' '.repeat(12);
 const CATALOG_FILE = 'src/config/live-video-sources.ts';
@@ -28,7 +36,7 @@ const PROXY_ENV = 'LIVE_VIDEO_AUDIT_PROXY_URL';
 const BATCH_SIZE_ENV = 'LIVE_VIDEO_BATCH_SIZE';
 /** The most players LIVE_VIDEO_BATCH_SIZE may put on one page. */
 const MAX_BATCH_SIZE = 16;
-const { parseProxyConfig } = createRequire(import.meta.url)('./_proxy-utils.cjs');
+const { parseProxyConfigForAttempt } = createRequire(import.meta.url)('./_proxy-utils.cjs');
 
 const USAGE = `Usage: npm run live-video:check -- <entry> [<entry> ...]
        npm run live-video:check -- --slot webcams/<id>
@@ -47,6 +55,12 @@ Label an entry with name=, e.g. kyiv=https://www.youtube.com/watch?v=e2gC37ILQmk
   dead only when both checks stall.
 --report also writes the --all result as JSON: where each slot shows, its status and every attempt.
   scripts/report-live-video-audit.mjs turns that file into the daily audit issue.
+
+A channel entry is first resolved to the video the channel has live right now, from the channel's
+/live page (fetched through the proxy below when it is set), and that video is played instead of the
+channel embed. When the page cannot be read or shows nothing live, the channel embed is played as before.
+When a slot's channel resolves to a live video that is not in the slot and a pinned video sits ahead of
+the channel, the check prints that video after "live now:", so fixing a dead pinned entry is one paste.
 
 YouTube entries play in headless Chromium as if embedded on ${PROBE_ORIGIN}, so a LIVE
 verdict covers the web dashboard only; the desktop sidecar embed (http://localhost:<port>)
@@ -124,7 +138,14 @@ function aloneSuffix(result) {
   return result.aloneChecks >= ALONE_RECHECKS ? ', in the batch or in two checks alone' : '';
 }
 
+/** A channel whose page gave no live video was checked as its embed; `why` says so, with the page's reason code. */
 function why(result) {
+  const base = entryWhy(result);
+  const { resolution } = result;
+  return resolution && resolution.status !== 'live' ? `${base}; channel page: ${resolution.reason}, checked the channel embed` : base;
+}
+
+function entryWhy(result) {
   if (!result.parsed.ok) return PROBLEM_WHY[result.parsed.problem];
   if (result.recheckSkipped) {
     return result.aloneChecks > 0 ? 'checked alone once, second check skipped: audit time budget used up' : 'not re-checked: audit time budget used up';
@@ -172,12 +193,14 @@ function failureDetail(result) {
 export function formatCheckLine(result) {
   const video = result.verdict?.video ?? null;
   let subject = result.parsed.ok ? canonicalEntry(result.parsed.candidate) : result.parsed.entry;
-  if (result.parsed.ok && result.parsed.candidate.kind === 'channel' && video?.videoId) subject += ` → ${video.videoId}`;
+  const probedVideoId = video?.videoId || (result.probedAs === 'resolved-video' ? result.resolution.videoId : null);
+  if (result.parsed.ok && result.parsed.candidate.kind === 'channel' && probedVideoId) subject += ` → ${probedVideoId}`;
   const byline = [video?.title && `"${video.title}"`, video?.author && `by ${video.author}`].filter(Boolean).join(' ') || null;
   const head = [verdictLabel(result).padEnd(10), result.name, subject, byline].filter(Boolean).join('  ');
   const detail = failureDetail(result);
   const lines = [head, `${INDENT}why: ${why(result)}${detail ? `: ${detail}` : ''}`];
   if (result.parsed.ok && result.verdict.verdict === 'live') lines.push(`${INDENT}paste: '${canonicalEntry(result.parsed.candidate)}'`);
+  if (result.suggestedEntry) lines.push(`${INDENT}live now: '${result.suggestedEntry}'`);
   return lines.join('\n');
 }
 
@@ -367,8 +390,10 @@ export async function probeYouTubeBatches(candidates, {
 /**
  * Reads a proxy for the YouTube browser in any shape the relay's parser accepts. The returned `host` is the
  * only part of it that may be printed. Errors name the variable, never the value: it carries the credential.
+ * `attempt` picks the proxy session: a Decodo sticky port moves to the next sticky session per attempt
+ * (parseProxyConfigForAttempt), so a retry can leave a dead exit; any other route is the same for every attempt.
  */
-export function parseAuditProxy(raw) {
+export function parseAuditProxy(raw, attempt = 0) {
   const value = String(raw ?? '').trim();
   const invalid = () => new Error(`${PROXY_ENV} is not a proxy URL: expected http(s)://user:pass@host:port, user:pass@host:port or [http(s)://]host:port:user:pass`);
   // The relay's parser reads any other scheme as the user of a user:pass@host:port value.
@@ -378,7 +403,7 @@ export function parseAuditProxy(raw) {
   // after the scheme and let the scheme decide TLS.
   const rest = scheme ? value.slice(scheme.length + 3) : '';
   const schemedColonForm = scheme && !rest.includes('@') && rest.split(':').length >= 4;
-  const config = schemedColonForm ? parseProxyConfig(rest) : parseProxyConfig(value);
+  const config = parseProxyConfigForAttempt(schemedColonForm ? rest : value, attempt);
   if (schemedColonForm && config) config.tls = scheme === 'https';
   if (!config?.host || !Number.isInteger(config.port) || config.port <= 0 || config.port > 65_535) throw invalid();
   const proxy = { server: `${config.tls ? 'https' : 'http'}://${config.host}:${config.port}` };
@@ -388,6 +413,8 @@ export function parseAuditProxy(raw) {
     proxy.password = colon === -1 ? '' : config.auth.slice(colon + 1);
   }
   proxy.host = config.host;
+  // The same proxy as a parseProxyConfig object, for the channel page fetch (proxyFetch).
+  proxy.config = config;
   return proxy;
 }
 
@@ -662,11 +689,77 @@ function formatEmptySlot(slot) {
   return ['EMPTY'.padEnd(10), slot, `no entries: paste a live stream URL into ${CATALOG_FILE}`].join('  ');
 }
 
+/** What a row plays: the video its channel resolved to, or its own candidate (a channel embed when resolution failed). */
+function probeCandidate(row) {
+  return row.probedAs === 'resolved-video' ? { kind: 'video', videoId: row.resolution.videoId } : row.parsed.candidate;
+}
+
+const RESOLUTION_STATUSES = new Set(['live', 'not-live', 'unreadable']);
+
+/** A resolver result as a row keeps it. Only a live result with an 11-character id can change what is probed. */
+function rowResolution(result) {
+  if (!result || !RESOLUTION_STATUSES.has(result.status)) return { status: 'unreadable', reason: 'skipped', videoId: null };
+  if (result.status === 'live') {
+    return /^[A-Za-z0-9_-]{11}$/.test(result.videoId ?? '')
+      ? { status: 'live', reason: null, videoId: result.videoId }
+      : { status: 'unreadable', reason: 'parse-error', videoId: null };
+  }
+  // The reason lands in `why`, which the audit issue renders as trusted text: only a reason code passes.
+  return { status: result.status, reason: /^[a-z0-9-]{1,40}$/.test(result.reason ?? '') ? result.reason : 'parse-error', videoId: null };
+}
+
+/**
+ * Resolves each channel the rows list once and records it on every row of that channel: `resolution` (the page's
+ * reading) and `probedAs`. A channel that resolved live is probed as that video, one attempt per entry, so attempts
+ * still map to entries; any other channel is probed as its embed. Without a resolver every channel is an embed.
+ * Returns the counts for the report, or null when nothing was resolved.
+ */
+async function resolveChannelRows(rows, resolveChannels, { budgetMs, channelIds }) {
+  const channelRows = rows.filter((row) => row.parsed.ok && row.parsed.candidate.kind === 'channel');
+  for (const row of channelRows) {
+    row.resolution = null;
+    row.probedAs = 'channel-embed';
+  }
+  if (!resolveChannels || channelRows.length === 0) return null;
+  const ids = channelIds ?? [...new Set(channelRows.map((row) => row.parsed.candidate.channelId))];
+  const results = await resolveChannels(ids, { budgetMs });
+  const byChannel = new Map(ids.map((id) => [id, rowResolution(results.get(id))]));
+  const counts = { attempted: ids.length, live: 0, notLive: 0, unreadable: 0 };
+  for (const { status } of byChannel.values()) {
+    if (status === 'live') counts.live++;
+    else if (status === 'not-live') counts.notLive++;
+    else counts.unreadable++;
+  }
+  for (const row of channelRows) {
+    row.resolution = byChannel.get(row.parsed.candidate.channelId) ?? rowResolution(null);
+    if (row.resolution.status === 'live') row.probedAs = 'resolved-video';
+  }
+  return counts;
+}
+
+/**
+ * The watch URL to paste for a slot, from its rows in try order: the first channel entry probed as its resolved video
+ * and verified live, whose video is not already an entry of the slot, with a pinned video entry ahead of it. A
+ * channel-only slot needs no paste: its channel entry already plays whatever the channel has live.
+ */
+function suggestedRow(slotRows) {
+  const isVideo = (row) => Boolean(row?.parsed.ok) && row.parsed.candidate.kind === 'video';
+  return slotRows.find((row, at) => row?.probedAs === 'resolved-video'
+    && row.verdict?.verdict === 'live'
+    && !slotRows.some((other) => isVideo(other) && other.parsed.candidate.videoId === row.resolution.videoId)
+    && slotRows.slice(0, at).some(isVideo)) ?? null;
+}
+
+function suggestedEntryFor(slotRows) {
+  const row = suggestedRow(slotRows);
+  return row ? `https://www.youtube.com/watch?v=${row.resolution.videoId}` : null;
+}
+
 async function probeRows(rows, { probeYouTube, probeHls }) {
   const youtubeRows = rows.filter((row) => row.parsed.ok && row.parsed.candidate.kind !== 'hls');
   const hlsRows = rows.filter((row) => row.parsed.ok && row.parsed.candidate.kind === 'hls');
   if (youtubeRows.length) {
-    const probed = await probeYouTube(youtubeRows.map((row) => row.parsed.candidate));
+    const probed = await probeYouTube(youtubeRows.map(probeCandidate));
     youtubeRows.forEach((row, index) => Object.assign(row, probed[index]));
   }
   if (hlsRows.length) {
@@ -745,6 +838,10 @@ function attemptRecord(row, regions = null) {
       aloneChecks: row.aloneChecks ?? 0,
       recheckSkipped: row.recheckSkipped === true,
       playlistUnchanged: row.playlistUnchanged === true,
+      resolvedVideoId: row.resolution?.videoId ?? null,
+      resolution: row.resolution?.status ?? null,
+      resolvedWhy: row.resolution?.reason ?? null,
+      probedAs: row.probedAs ?? null,
     },
   };
 }
@@ -816,20 +913,22 @@ function regionsOf(slot, surfaces) {
 }
 
 /** The --report file: every slot with where it shows, its status and every attempt, plus the canaries. */
-export function buildAuditReport({ catalog, rows, surfaces, checkedAt }) {
+export function buildAuditReport({ catalog, rows, surfaces, checkedAt, resolution = null }) {
   const byName = new Map(rows.map((row) => [row.name, row]));
   const slots = catalogSlots(catalog).map(([slot, entries]) => ({
     slot,
     attempts: entries.map((_, index) => attemptRecord(byName.get(entryName(slot, index)), regionsOf(slot, surfaces))),
+    suggestedEntry: suggestedEntryFor(entries.map((_, index) => byName.get(entryName(slot, index)))),
   }));
   const statuses = new Map(slots.map(({ slot, attempts }) => [slot, slotStatus(attempts)]));
   const placements = placeSlots(catalog, statuses, surfaces);
   return {
     checkedAt,
+    resolution: resolution ?? { attempted: 0, live: 0, notLive: 0, unreadable: 0 },
     canaries: catalog.canaries.map((_, index) => attemptRecord(byName.get(`canary/${index + 1}`))),
-    slots: slots.map(({ slot, attempts }) => {
+    slots: slots.map(({ slot, attempts, suggestedEntry }) => {
       const { surface, shownByDefault, shownInstead } = placements.get(slot);
-      return { slot, surface, shownByDefault, status: statuses.get(slot), attempts, shownInstead };
+      return { slot, surface, shownByDefault, status: statuses.get(slot), attempts, shownInstead, suggestedEntry };
     }),
   };
 }
@@ -859,7 +958,7 @@ async function recheckStalledAlone(rows, probeYouTube, { budgetMs, clock }) {
         row.recheckSkipped = true;
         continue;
       }
-      const [probed] = await probeYouTube([row.parsed.candidate], { batchSize: 1 });
+      const [probed] = await probeYouTube([probeCandidate(row)], { batchSize: 1 });
       Object.assign(row, probed, { aloneChecks: check });
     }
     pending = pending.filter((row) => !row.recheckSkipped && stalledLikeThePage(row));
@@ -876,6 +975,9 @@ export async function runCheck(argv, options = {}) {
     writeReport = writeFileSync,
     now = () => new Date(),
     clock = () => performance.now(),
+    // (channelIds, { budgetMs }) => Map<channelId, result>; runCli passes one. Without it channels are probed as embeds.
+    resolveChannels = null,
+    resolveBudgetMs = RESOLVE_BUDGET_MS,
   } = options;
   const probeHls = options.probeHls ?? ((candidates) => probeHlsCandidates(candidates, fetchImpl));
   let args;
@@ -898,6 +1000,10 @@ export async function runCheck(argv, options = {}) {
   const checkedAt = now().toISOString();
 
   const rows = targets.entries.map(({ name, entry }) => ({ name, parsed: parseSourceEntry(entry) }));
+  // Canaries included: a canary whose page resolves is probed as its video, so a stalling canary embed no longer
+  // decides how the run is read. --all resolves the catalog's channel list, which refreshChannels caps.
+  const channelIds = args.mode === 'all' ? refreshChannels(catalog, { includeCanaries: true }).map(({ channelId }) => channelId) : undefined;
+  const resolution = await resolveChannelRows(rows, resolveChannels, { budgetMs: resolveBudgetMs, channelIds });
   // Canaries first, on their own page: whether one plays decides how a never-ready slot player is read.
   const canaryRows = rows.filter(isCanary);
   const slotRows = rows.filter((row) => !isCanary(row));
@@ -912,13 +1018,23 @@ export async function runCheck(argv, options = {}) {
     await recheckStalledAlone(slotRows, probeYouTube, { budgetMs: ALONE_RECHECK_BUDGET_MS, clock });
   }
 
+  if (args.mode !== 'entries') {
+    const byName = new Map(rows.map((row) => [row.name, row]));
+    for (const [slot, entries] of catalogSlots(catalog)) {
+      const slotRows = entries.map((_, index) => byName.get(entryName(slot, index)));
+      const row = slotRows.every(Boolean) ? suggestedRow(slotRows) : null;
+      if (row) row.suggestedEntry = suggestedEntryFor(slotRows);
+    }
+  }
+
   for (const slot of targets.empty) write(formatEmptySlot(slot));
   for (const row of rows) write(formatCheckLine(row));
+  if (resolution) write(`Channel pages: ${resolution.live} of ${resolution.attempted} resolved to a live video.`);
   const notLive = rows.filter((row) => !(row.parsed.ok && row.verdict?.verdict === 'live')).length;
   if (rows.length > 0) write(notLive ? `${notLive} of ${rows.length} entries are not live.` : `All ${rows.length} entries are live.`);
   if (targets.empty.length > 0) write(`${targets.empty.length} slot(s) have no entries.`);
   if (args.report) {
-    const report = buildAuditReport({ catalog, rows, surfaces: placement, checkedAt });
+    const report = buildAuditReport({ catalog, rows, surfaces: placement, checkedAt, resolution });
     writeReport(args.report, `${JSON.stringify(report, null, 2)}\n`);
   }
   return targets.empty.length > 0 ? 1 : exitCodeFor(rows);
@@ -934,6 +1050,7 @@ export async function runCli(argv, {
   write = console.log,
   run = runCheck,
   probeWithBrowser = probeYouTubeWithBrowser,
+  fetchChannelPage = fetchChannelLivePage,
 } = {}) {
   let proxy;
   let batchSize;
@@ -945,10 +1062,28 @@ export async function runCli(argv, {
     return 2;
   }
   if (proxy) write(`live-video: YouTube players go through the proxy at ${proxy.host}.`);
+  const rawProxy = String(env[PROXY_ENV] ?? '').trim();
+  // Channel pages run first. A page that fails at the proxy moves them to the next proxy session; the browser then
+  // launches on the session they ended on, so the canaries and every slot share one exit that was just seen working.
+  const session = { current: 0 };
+  const proxyFor = (attempt) => (proxy && attempt > 0 ? parseAuditProxy(rawProxy, attempt) : proxy);
   return run(argv, {
     write,
     // An alone re-check passes its own batchSize of 1, which wins over the configured size.
-    probeYouTube: (candidates, options = {}) => probeWithBrowser(candidates, { batchSize, ...options, proxy }),
+    probeYouTube: (candidates, options = {}) => probeWithBrowser(candidates, { batchSize, ...options, proxy: proxyFor(session.current) }),
+    // Channel pages go through the browser's proxy: YouTube walls datacenter IPs, a GitHub runner's included.
+    resolveChannels: async (channelIds, { budgetMs } = {}) => {
+      const results = await resolveChannelsLive(channelIds, {
+        fetchPage: (channelId, { attempt = 0 } = {}) => fetchChannelPage(channelId, { proxy: proxyFor(attempt)?.config ?? null }),
+        concurrency: RESOLVE_CONCURRENCY,
+        budgetMs,
+        session,
+      });
+      if (proxy && session.current > 0) {
+        write(`live-video: a proxy exit failed; channel pages and YouTube players moved to proxy session ${session.current}.`);
+      }
+      return results;
+    },
   });
 }
 

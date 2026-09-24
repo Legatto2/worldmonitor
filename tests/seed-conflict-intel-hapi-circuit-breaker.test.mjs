@@ -452,7 +452,7 @@ test('HAPI HDX metadata identity avoids the Railway WAF challenge', async () => 
   assert.equal(rows[0].location_code, 'SDN');
 });
 
-test('HAPI bulk rows retain the previous complete month alongside the latest reference period', () => {
+test('HAPI bulk rows retain both periods without adding overlapping civilian targeting to political violence', () => {
   const rows = [
     {
       location_code: 'SDN',
@@ -509,8 +509,8 @@ test('HAPI bulk rows retain the previous complete month alongside the latest ref
         countryCode: 'SD',
         countryName: 'Sudan',
         conflictEventsTotal: 23,
-        conflictPoliticalViolenceEvents: 16,
-        conflictFatalities: 5,
+        conflictPoliticalViolenceEvents: 12,
+        conflictFatalities: 3,
         referencePeriod: '2026-07-01',
         conflictDemonstrations: 7,
         updatedAt: NOW,
@@ -551,8 +551,8 @@ test('HAPI periods select administrative levels independently and roll over the 
       countryCode: 'SD',
       countryName: 'Sudan',
       conflictEventsTotal: 12,
-      conflictPoliticalViolenceEvents: 7,
-      conflictFatalities: 3,
+      conflictPoliticalViolenceEvents: 3,
+      conflictFatalities: 1,
       referencePeriod: '2025-12-01',
       conflictDemonstrations: 5,
       updatedAt: nowMs,
@@ -638,7 +638,8 @@ test('one aggregation pass over both sweeps keeps each country at its own admin 
   assert.equal(combined.AF.summary.conflictEventsTotal, 11);
   assert.equal(combined.AF.summary.conflictFatalities, 3);
   assert.equal(combined.HT.summary.conflictEventsTotal, 4);
-  assert.equal(combined.HT.summary.conflictFatalities, 9);
+  assert.equal(combined.HT.summary.conflictPoliticalViolenceEvents, 0);
+  assert.equal(combined.HT.summary.conflictFatalities, 0);
 
   // Behaviour preservation: every country live today comes from the admin-0
   // sweep, and appending the disjoint subnational rows must not perturb them.

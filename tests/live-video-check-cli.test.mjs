@@ -16,11 +16,13 @@ import {
   probeYouTubeBatches,
   probeYouTubeCandidates,
   probeYouTubeWithBrowser,
+  RESOLVE_BUDGET_MS,
   resolveAuditProxy,
   runCheck,
   runCli,
   slotStatus,
 } from '../scripts/check-live-video-sources.mjs';
+import { resolveChannelsLive } from '../scripts/lib/live-video-channel-live.mjs';
 import { extractLiveVideoSurfaces, readLiveVideoSurfaces } from '../scripts/lib/live-video-surfaces.mjs';
 import { LIVE_NEWS_SOURCES, WEBCAM_SOURCES } from '../src/config/live-video-sources.ts';
 import { LIVE_VIDEO_TIMING, parseSourceEntry } from '../src/services/live-video/model.ts';
@@ -1260,6 +1262,171 @@ describe('audit report (--all --report)', () => {
     assert.equal(slot.attempts[0].why, 'HLS playlist is live (it advanced between reloads)');
   });
 
+  describe('channel resolution', () => {
+    const CHANNEL_ID = 'UCIALMKvObZNtJ6AmdCLP7Lg';
+    const CHANNEL = `https://www.youtube.com/channel/${CHANNEL_ID}`;
+    const CANARY_ID = 'UCNye-wNBqNL5ZzHSJj3l8Bg';
+    const RESOLVED = 'abc123DEF45';
+    const DEAD = 'deadDEADd01';
+    const liveResult = (channelId, videoId) => ({ status: 'live', reason: null, videoId, channelId, title: 'Live', playableInEmbed: true });
+    const unreadableResult = (channelId, reason) => ({ status: 'unreadable', reason, videoId: null, channelId, title: null });
+    /** A fake resolver: `answers` maps a channel id to its result; every call's ids and options are recorded. */
+    function fakeResolver(answers) {
+      const calls = [];
+      const resolveChannels = async (ids, options) => {
+        calls.push({ ids, options });
+        return new Map(ids.map((id) => [id, answers[id] ?? unreadableResult(id, 'fetch-error')]));
+      };
+      return { calls, resolveChannels };
+    }
+    const deadOr = (candidate) => (candidate.videoId === DEAD
+      ? { verdict: { verdict: 'failed', outcome: { kind: 'player-error', code: 100 } }, durationSeconds: null, verdictAtMs: 900 }
+      : live(candidate.videoId ?? 'chanEmbed01'));
+    const newsCatalog = (entries) => ({ webcams: {}, gridPriority: [], news: { bloomberg: entries }, canaries: [CANARY] });
+
+    it('probes a channel that resolved live as its video, and suggests it when a dead pinned entry sits ahead (AE1)', async () => {
+      const { calls: resolverCalls, resolveChannels } = fakeResolver({
+        [CHANNEL_ID]: liveResult(CHANNEL_ID, RESOLVED),
+        [CANARY_ID]: liveResult(CANARY_ID, 'gCNeDWCI0vo'),
+      });
+      const { calls, probeYouTube } = recordingProbe(deadOr);
+      const { code, lines, writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], {
+        catalog: newsCatalog([watch(DEAD), CHANNEL]),
+        probeYouTube,
+        resolveChannels,
+      });
+      assert.equal(code, 1);
+      assert.deepEqual(resolverCalls, [{ ids: [CHANNEL_ID, CANARY_ID], options: { budgetMs: RESOLVE_BUDGET_MS } }]);
+      assert.deepEqual(calls.map((call) => call.ids), [['gCNeDWCI0vo'], [DEAD, RESOLVED]], 'the probe gets the videos, never the channel ids');
+
+      const [slot] = report.slots;
+      assert.equal(slot.status, 'degraded');
+      assert.equal(slot.suggestedEntry, watch(RESOLVED));
+      const [, channel] = slot.attempts;
+      assert.equal(channel.entry, CHANNEL);
+      assert.equal(channel.kind, 'channel');
+      assert.equal(channel.verdict, 'live');
+      assert.deepEqual(
+        [channel.evidence.resolvedVideoId, channel.evidence.resolution, channel.evidence.resolvedWhy, channel.evidence.probedAs],
+        [RESOLVED, 'live', null, 'resolved-video'],
+      );
+      assert.equal(slot.attempts[0].evidence.probedAs, null, 'a video entry is probed as itself');
+      assert.equal(report.canaries[0].evidence.probedAs, 'resolved-video');
+      assert.deepEqual(report.resolution, { attempted: 2, live: 2, notLive: 0, unreadable: 0 });
+
+      const text = lines.join('\n');
+      assert.match(text, new RegExp(`LIVE {8}live-news/bloomberg#2  ${CHANNEL} → ${RESOLVED}`));
+      assert.match(text, new RegExp(`paste: '${CHANNEL}'\\n {12}live now: 'https://www\\.youtube\\.com/watch\\?v=${RESOLVED}'`));
+      assert.match(text, /Channel pages: 2 of 2 resolved to a live video\./);
+    });
+
+    it('suggests nothing for a channel-only slot that resolved live (AE1b)', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: liveResult(CHANNEL_ID, RESOLVED) });
+      const { lines, writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], {
+        catalog: newsCatalog([CHANNEL]),
+        probeYouTube: recordingProbe(deadOr).probeYouTube,
+        resolveChannels,
+      });
+      const [slot] = report.slots;
+      assert.equal(slot.status, 'ok');
+      assert.equal(slot.suggestedEntry, null);
+      assert.equal(slot.attempts[0].evidence.probedAs, 'resolved-video');
+      assert.doesNotMatch(lines.join('\n'), /live now:/);
+    });
+
+    it('suggests nothing when the resolved video is already an entry of the slot', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: liveResult(CHANNEL_ID, RESOLVED) });
+      const { writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], {
+        catalog: newsCatalog([watch(RESOLVED), CHANNEL]),
+        probeYouTube: recordingProbe(deadOr).probeYouTube,
+        resolveChannels,
+      });
+      assert.equal(report.slots[0].suggestedEntry, null);
+    });
+
+    it('probes a channel whose page could not be read as its embed, and says why (AE2)', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: unreadableResult(CHANNEL_ID, 'consent-wall'), [CANARY_ID]: unreadableResult(CANARY_ID, 'http-429') });
+      const { calls, probeYouTube } = recordingProbe(deadOr);
+      const { lines, writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], {
+        catalog: newsCatalog([watch(DEAD), CHANNEL]),
+        probeYouTube,
+        resolveChannels,
+      });
+      assert.deepEqual(calls.map((call) => call.ids), [[CANARY_ID], [DEAD, CHANNEL_ID]], 'channel embeds, canary included');
+      const [slot] = report.slots;
+      const [, channel] = slot.attempts;
+      assert.deepEqual(
+        [channel.evidence.resolvedVideoId, channel.evidence.resolution, channel.evidence.resolvedWhy, channel.evidence.probedAs],
+        [null, 'unreadable', 'consent-wall', 'channel-embed'],
+      );
+      assert.match(channel.why, /; channel page: consent-wall, checked the channel embed$/);
+      assert.equal(slot.suggestedEntry, null);
+      assert.equal(report.canaries[0].verdict, 'live', 'a canary that cannot be resolved still plays as its embed');
+      assert.equal(report.canaries[0].evidence.probedAs, 'channel-embed');
+      assert.deepEqual(report.resolution, { attempted: 2, live: 0, notLive: 0, unreadable: 2 });
+      assert.match(lines.join('\n'), /Channel pages: 0 of 2 resolved to a live video\./);
+    });
+
+    it('never probes a resolved "live" result whose id is not an 11-character video id', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: liveResult(CHANNEL_ID, 'https://evil/x.m3u8') });
+      const { calls, probeYouTube } = recordingProbe(deadOr);
+      const { writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], { catalog: newsCatalog([CHANNEL]), probeYouTube, resolveChannels });
+      assert.deepEqual(calls.at(-1).ids, [CHANNEL_ID]);
+      assert.deepEqual([report.slots[0].attempts[0].evidence.resolution, report.slots[0].attempts[0].evidence.resolvedWhy], ['unreadable', 'parse-error']);
+    });
+
+    it('keeps only a reason code from the resolver, since `why` is rendered as trusted text', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: unreadableResult(CHANNEL_ID, 'http-429 [x](https://evil.example) @koala73') });
+      const { writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], { catalog: newsCatalog([CHANNEL]), probeYouTube: recordingProbe(deadOr).probeYouTube, resolveChannels });
+      const [channel] = report.slots[0].attempts;
+      assert.equal(channel.evidence.resolvedWhy, 'parse-error');
+      assert.doesNotMatch(channel.why, /evil|@koala73/);
+    });
+
+    it('re-checks a stalled resolved video alone as that video', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: liveResult(CHANNEL_ID, RESOLVED) });
+      const { calls, probeYouTube } = recordingProbe((candidate, call) => (candidate.videoId === RESOLVED && call === 2 ? silentVerdict : live(candidate.videoId ?? 'gCNeDWCI0vo')));
+      const { writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], { catalog: newsCatalog([CHANNEL]), probeYouTube, resolveChannels });
+      assert.deepEqual(calls[2], { ids: [RESOLVED], batchSize: 1 });
+      assert.equal(report.slots[0].attempts[0].verdict, 'live');
+    });
+
+    it('probes every channel as its embed once the resolution budget is used up, and still completes', async () => {
+      let fetched = 0;
+      const resolveChannels = (ids, { budgetMs }) => resolveChannelsLive(ids, { fetchPage: async () => { fetched++; return liveResult(CHANNEL_ID, RESOLVED); }, budgetMs });
+      const { calls, probeYouTube } = recordingProbe(deadOr);
+      const { writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], {
+        catalog: newsCatalog([watch(DEAD), CHANNEL]),
+        probeYouTube,
+        resolveChannels,
+        resolveBudgetMs: 0,
+      });
+      assert.equal(fetched, 0);
+      assert.deepEqual(calls.map((call) => call.ids), [[CANARY_ID], [DEAD, CHANNEL_ID]]);
+      assert.deepEqual([report.slots[0].attempts[1].evidence.resolvedWhy, report.slots[0].attempts[1].evidence.probedAs], ['skipped', 'channel-embed']);
+      assert.deepEqual(report.resolution, { attempted: 2, live: 0, notLive: 0, unreadable: 2 });
+    });
+
+    it('records no resolution when no resolver is given', async () => {
+      const { lines, writes: [{ report }] } = await audit(['--all', '--report', 'audit.json'], { catalog: newsCatalog([watch(DEAD), CHANNEL]) });
+      const [video, channel] = report.slots[0].attempts;
+      assert.deepEqual([channel.evidence.resolution, channel.evidence.resolvedWhy, channel.evidence.probedAs], [null, null, 'channel-embed']);
+      assert.deepEqual([video.evidence.resolution, video.evidence.probedAs], [null, null]);
+      assert.deepEqual(report.resolution, { attempted: 0, live: 0, notLive: 0, unreadable: 0 });
+      assert.doesNotMatch(lines.join('\n'), /Channel pages|channel page:/);
+    });
+
+    it('resolves a channel given on the command line and prints the video it plays', async () => {
+      const { resolveChannels } = fakeResolver({ [CHANNEL_ID]: liveResult(CHANNEL_ID, RESOLVED) });
+      const { calls, probeYouTube } = recordingProbe(deadOr);
+      const { code, lines } = await audit([CHANNEL], { probeYouTube, resolveChannels });
+      assert.equal(code, 0);
+      assert.deepEqual(calls.map((call) => call.ids), [[RESOLVED]]);
+      assert.match(lines.join('\n'), new RegExp(`LIVE {8}${CHANNEL} → ${RESOLVED}  "Live cam" by Cams`));
+      assert.doesNotMatch(lines.join('\n'), /live now:/, 'no slot, so nothing to suggest');
+    });
+  });
+
   it('fails before probing when a slot has no place on the dashboard', async () => {
     let probed = false;
     const unplaced = { ...surfaces, webcamFeeds: surfaces.webcamFeeds.filter((feed) => feed.id !== 'sydney') };
@@ -1350,25 +1517,25 @@ describe('audit proxy (LIVE_VIDEO_AUDIT_PROXY_URL)', () => {
 
   it('parses every shape the relay accepted for YOUTUBE_PROXY_URL and PROXY_URL into Playwright proxy settings', () => {
     assert.deepEqual(parseAuditProxy(`http://${USER}:${PASS}@proxy.example.net:9000`),
-      { server: 'http://proxy.example.net:9000', username: USER, password: PASS, host: 'proxy.example.net' });
+      { server: 'http://proxy.example.net:9000', username: USER, password: PASS, host: 'proxy.example.net', config: { host: 'proxy.example.net', port: 9000, auth: `${USER}:${PASS}`, tls: false } });
     assert.deepEqual(parseAuditProxy(`https://${USER}:${encodeURIComponent('p@ss:word')}@proxy.example.net:9443`),
-      { server: 'https://proxy.example.net:9443', username: USER, password: 'p@ss:word', host: 'proxy.example.net' });
+      { server: 'https://proxy.example.net:9443', username: USER, password: 'p@ss:word', host: 'proxy.example.net', config: { host: 'proxy.example.net', port: 9443, auth: `${USER}:p@ss:word`, tls: true } });
     // Froxy/OREF shape: the relay's parser connects to this proxy over TLS.
     assert.deepEqual(parseAuditProxy(`${USER}:${PASS}@proxy.example.net:9000`),
-      { server: 'https://proxy.example.net:9000', username: USER, password: PASS, host: 'proxy.example.net' });
+      { server: 'https://proxy.example.net:9000', username: USER, password: PASS, host: 'proxy.example.net', config: { host: 'proxy.example.net', port: 9000, auth: `${USER}:${PASS}`, tls: true } });
     // Decodo shape; a password may itself contain colons.
     assert.deepEqual(parseAuditProxy(`gate.example.com:10001:${USER}:${PASS}:tail`),
-      { server: 'https://gate.example.com:10001', username: USER, password: `${PASS}:tail`, host: 'gate.example.com' });
+      { server: 'https://gate.example.com:10001', username: USER, password: `${PASS}:tail`, host: 'gate.example.com', config: { host: 'gate.example.com', port: 10001, auth: `${USER}:${PASS}:tail`, tls: true } });
   });
 
   it('reads a scheme-prefixed host:port:user:pass value, taking TLS from the scheme', () => {
     // The relay's parseProxyConfig returns null for these; the bare form parses there with TLS on.
     assert.deepEqual(parseAuditProxy(`https://gate.example.com:10001:${USER}:${PASS}`),
-      { server: 'https://gate.example.com:10001', username: USER, password: PASS, host: 'gate.example.com' });
+      { server: 'https://gate.example.com:10001', username: USER, password: PASS, host: 'gate.example.com', config: { host: 'gate.example.com', port: 10001, auth: `${USER}:${PASS}`, tls: true } });
     assert.deepEqual(parseAuditProxy(`http://gate.example.com:10001:${USER}:${PASS}`),
-      { server: 'http://gate.example.com:10001', username: USER, password: PASS, host: 'gate.example.com' });
+      { server: 'http://gate.example.com:10001', username: USER, password: PASS, host: 'gate.example.com', config: { host: 'gate.example.com', port: 10001, auth: `${USER}:${PASS}`, tls: false } });
     assert.deepEqual(parseAuditProxy(`gate.example.com:10001:${USER}:${PASS}`),
-      { server: 'https://gate.example.com:10001', username: USER, password: PASS, host: 'gate.example.com' });
+      { server: 'https://gate.example.com:10001', username: USER, password: PASS, host: 'gate.example.com', config: { host: 'gate.example.com', port: 10001, auth: `${USER}:${PASS}`, tls: true } });
     // A password with colons survives, and a malformed prefixed value is still rejected without echoing it.
     assert.equal(parseAuditProxy(`https://gate.example.com:10001:${USER}:${PASS}:tail`).password, `${PASS}:tail`);
     for (const bad of [`https://gate.example.com:port:${USER}:${PASS}`, `https://gate.example.com:10001:${USER}`, `https://:10001:${USER}:${PASS}`]) {
@@ -1381,7 +1548,8 @@ describe('audit proxy (LIVE_VIDEO_AUDIT_PROXY_URL)', () => {
   });
 
   it('accepts a proxy without credentials', () => {
-    assert.deepEqual(parseAuditProxy('http://proxy.example.net:3128'), { server: 'http://proxy.example.net:3128', host: 'proxy.example.net' });
+    assert.deepEqual(parseAuditProxy('http://proxy.example.net:3128'),
+      { server: 'http://proxy.example.net:3128', host: 'proxy.example.net', config: { host: 'proxy.example.net', port: 3128, auth: null, tls: false } });
   });
 
   it('rejects a malformed value naming the variable, never echoing the value', () => {
@@ -1517,6 +1685,94 @@ describe('audit proxy (LIVE_VIDEO_AUDIT_PROXY_URL)', () => {
       assert.equal(ran, false, bad);
       assert.match(out.join('\n'), /LIVE_VIDEO_BATCH_SIZE must be a whole number from 1 to 16/, bad);
     }
+  });
+
+  it('fetches channel pages through the same proxy as the browser, as a parseProxyConfig object, and never prints it', async () => {
+    const out = [];
+    const pages = [];
+    const code = await runCli(['--all'], {
+      env: { GITHUB_ACTIONS: 'true', LIVE_VIDEO_AUDIT_PROXY_URL: `gate.example.com:7000:${USER}:${PASS}` },
+      write: (line) => out.push(line),
+      fetchChannelPage: async (channelId, options) => {
+        pages.push({ channelId, options });
+        return { status: 'not-live', reason: 'not-live', videoId: null, channelId, title: null };
+      },
+      run: async (_argv, options) => {
+        const results = await options.resolveChannels(['UCNye-wNBqNL5ZzHSJj3l8Bg', 'UCknLrEdhRCp1aegoMqRaCZg'], { budgetMs: 60_000 });
+        assert.deepEqual([...results.keys()], ['UCNye-wNBqNL5ZzHSJj3l8Bg', 'UCknLrEdhRCp1aegoMqRaCZg']);
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.equal(pages.length, 2);
+    for (const { options } of pages) assert.deepEqual(options.proxy, { host: 'gate.example.com', port: 7000, auth: `${USER}:${PASS}`, tls: true });
+    assert.doesNotMatch(out.join('\n'), LEAK);
+  });
+
+  it('moves a Decodo sticky proxy to the next session per attempt, in every shape, and leaves other routes alone', () => {
+    assert.equal(parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`, 2).server, 'https://gate.decodo.com:10003');
+    assert.equal(parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`, 2).config.port, 10003);
+    assert.equal(parseAuditProxy(`http://gate.decodo.com:10001:${USER}:${PASS}`, 1).server, 'http://gate.decodo.com:10002');
+    assert.equal(parseAuditProxy(`${USER}:${PASS}@gate.decodo.com:10005`, 1).server, 'https://gate.decodo.com:10006');
+    assert.equal(parseAuditProxy(`gate.decodo.com:7000:${USER}:${PASS}`, 3).server, 'https://gate.decodo.com:7000');
+    assert.equal(parseAuditProxy(`http://${USER}:${PASS}@proxy.example.net:10001`, 3).server, 'http://proxy.example.net:10001');
+    assert.deepEqual(parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`), parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`, 0));
+  });
+
+  it('moves channel pages to the next sticky session when the exit fails, and launches the browser on the session that worked', async () => {
+    const out = [];
+    const pages = [];
+    const launches = [];
+    const code = await runCli(['--all'], {
+      env: { GITHUB_ACTIONS: 'true', LIVE_VIDEO_AUDIT_PROXY_URL: `gate.decodo.com:10001:${USER}:${PASS}` },
+      write: (line) => out.push(line),
+      fetchChannelPage: async (channelId, options) => {
+        pages.push(options.proxy.port);
+        return options.proxy.port === 10001
+          ? { status: 'unreadable', reason: 'fetch-error', videoId: null, channelId, title: null, proxyFailure: true, detail: 'Proxy CONNECT: HTTP/1.1 522 Server Error' }
+          : { status: 'live', reason: null, videoId: 'abc123DEF45', channelId, title: 'Live', playableInEmbed: true };
+      },
+      probeWithBrowser: async (candidates, options) => { launches.push(options.proxy.server); return candidates.map(() => ({})); },
+      run: async (_argv, options) => {
+        const results = await options.resolveChannels(['UCNye-wNBqNL5ZzHSJj3l8Bg'], { budgetMs: 60_000 });
+        assert.equal(results.get('UCNye-wNBqNL5ZzHSJj3l8Bg').status, 'live');
+        await options.probeYouTube([{ kind: 'video', videoId: 'a' }]);
+        await options.probeYouTube([{ kind: 'video', videoId: 'b' }], { batchSize: 1 });
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(pages, [10001, 10002]);
+    assert.deepEqual(launches, ['https://gate.decodo.com:10002', 'https://gate.decodo.com:10002'], 'canaries, slots and alone checks share the healthy exit');
+    assert.match(out.join('\n'), /proxy session 1/);
+    assert.doesNotMatch(out.join('\n'), LEAK);
+  });
+
+  it('keeps the browser on the configured session when no channel page failed at the proxy', async () => {
+    const launches = [];
+    await runCli(['--all'], {
+      env: { LIVE_VIDEO_AUDIT_PROXY_URL: `gate.decodo.com:10001:${USER}:${PASS}` },
+      write: () => {},
+      fetchChannelPage: async (channelId) => ({ status: 'unreadable', reason: 'bot-wall', videoId: null, channelId, title: null }),
+      probeWithBrowser: async (candidates, options) => { launches.push(options.proxy.server); return candidates.map(() => ({})); },
+      run: async (_argv, options) => {
+        await options.resolveChannels(['UCNye-wNBqNL5ZzHSJj3l8Bg'], { budgetMs: 60_000 });
+        await options.probeYouTube([{ kind: 'video', videoId: 'a' }]);
+        return 0;
+      },
+    });
+    assert.deepEqual(launches, ['https://gate.decodo.com:10001']);
+  });
+
+  it('fetches channel pages directly when no proxy is set locally', async () => {
+    const pages = [];
+    await runCli(['--all'], {
+      env: {},
+      write: () => {},
+      fetchChannelPage: async (channelId, options) => { pages.push(options); return { status: 'not-live', reason: 'not-live', videoId: null, channelId, title: null }; },
+      run: async (_argv, options) => { await options.resolveChannels(['UCNye-wNBqNL5ZzHSJj3l8Bg'], {}); return 0; },
+    });
+    assert.deepEqual(pages, [{ proxy: null }]);
   });
 
   it('runs without a proxy locally', async () => {

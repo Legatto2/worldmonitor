@@ -1,7 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { installStaleBundleCheck } from '../src/bootstrap/stale-bundle-check.ts';
-import { OPEN_MODAL_SELECTOR, type VisibleElementLike } from '../src/utils/open-modal.ts';
+import { RELOAD_BLOCKING_MODAL_SELECTOR, type VisibleElementLike } from '../src/utils/open-modal.ts';
+import type { DeferralReport } from '../src/bootstrap/stale-bundle-check.ts';
 
 // ---------------------------------------------------------------------------
 // Fake environment
@@ -21,7 +22,7 @@ interface FakeEnv {
    * models UnifiedSettings at rest: the overlay is in the DOM for the whole
    * session but display:none, so it must NOT suppress a reload.
    */
-  modal: 'none' | 'open' | 'mounted-hidden';
+  modal: 'none' | 'open' | 'mounted-hidden' | 'open-reload-safe';
   /** When set, the fetch fake awaits it before answering (in-flight race). */
   fetchGate: Promise<void> | null;
   /**
@@ -29,8 +30,8 @@ interface FakeEnv {
    * to getClientRects. That is the mobile cohort #8577 was reported on.
    */
   supportsCheckVisibility: boolean;
-  /** Deferral episodes observed, for the once-per-episode report. */
-  deferralReports: Array<{ current: string; deployed: string }>;
+  /** Reports observed, for the once-per-episode and wedge signals. */
+  deferralReports: DeferralReport[];
 }
 
 function makeEnv(initial: Partial<{ ok: boolean; status: number; body: string }> = {}): FakeEnv {
@@ -61,10 +62,11 @@ function makeEnv(initial: Partial<{ ok: boolean; status: number; body: string }>
   };
 }
 
-function install(env: FakeEnv, currentHash = 'sha-running-bundle', minIntervalMs = 60_000) {
+function install(env: FakeEnv, currentHash = 'sha-running-bundle', minIntervalMs = 60_000, wedgeAfterDeferrals?: number) {
   return installStaleBundleCheck({
     currentHash,
     minIntervalMs,
+    ...(wedgeAfterDeferrals === undefined ? {} : { wedgeAfterDeferrals }),
     eventTarget: {
       addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => {
         if (type === 'focus') env.focusListeners.push(listener as EventListener);
@@ -88,12 +90,17 @@ function install(env: FakeEnv, currentHash = 'sha-running-bundle', minIntervalMs
       },
       get visibilityState() { return env.visibilityState; },
       querySelectorAll: (sel: string) => {
-        // Pin the selector: a regression that queries the wrong one must not
-        // leave this suite green (mirrors tests/sw-update.test.mts).
-        if (sel !== OPEN_MODAL_SELECTOR) return [];
+        // Pin the selector: this module must ask the reload-blocking question,
+        // not the broader overlay one. A regression that queries the wrong
+        // selector must not leave this suite green.
+        if (sel !== RELOAD_BLOCKING_MODAL_SELECTOR) return [];
         if (env.modal === 'none') return [];
+        // The real DOM applies `:not([data-reload-safe])` for this selector,
+        // so an opted-out overlay simply is not in the result set.
+        if (env.modal === 'open-reload-safe') return [];
         const el = (visible: boolean): Element & VisibleElementLike => ({
           getClientRects: () => ({ length: visible ? 1 : 0 }),
+          className: 'cl-modalBackdrop',
           ...(env.supportsCheckVisibility ? { checkVisibility: () => visible } : {}),
         } as unknown as Element & VisibleElementLike);
         if (env.modal === 'mounted-hidden') return [el(false)];
@@ -114,7 +121,7 @@ function install(env: FakeEnv, currentHash = 'sha-running-bundle', minIntervalMs
       return new Response(body, { status, statusText: ok ? 'OK' : 'Error' });
     },
     reload: () => { env.reloadCalls++; },
-    reportDeferral: (current: string, deployed: string) => { env.deferralReports.push({ current, deployed }); },
+    reportDeferral: (report: DeferralReport) => { env.deferralReports.push(report); },
     now: () => env.clock.value,
   });
 }
@@ -363,6 +370,63 @@ describe('installStaleBundleCheck', () => {
     assert.equal(env.reloadCalls, 1, 'a hidden overlay is not an open modal');
   });
 
+  // --- reload opt-out (WORLDMONITOR-15X) -------------------------------------
+  // The onboarding popover auto-opens for every preset-less user and carries
+  // role="dialog". Before the opt-out it deferred reloads for a broad
+  // population, which suppressed PR #3466's safety net far beyond the sign-up
+  // case this guard exists for.
+
+  it('DOES reload when the only open overlay opted out of blocking reloads', async () => {
+    env.fetchResponse = { ok: true, status: 200, body: 'sha-newer-deploy' };
+    env.modal = 'open-reload-safe';
+    install(env);
+
+    await fireFocus(env);
+    assert.equal(env.reloadCalls, 1, 'a reload-safe overlay must not hold the reload off');
+    assert.equal(env.deferralReports.length, 0, 'and must not report a deferral');
+  });
+
+  it('reports a suspected wedge once when an overlay outlasts any plausible email wait', async () => {
+    env.fetchResponse = { ok: true, status: 200, body: 'sha-newer-deploy' };
+    env.modal = 'open';
+    install(env, 'sha-running-bundle', 60_000, 4);
+
+    for (let i = 0; i < 10; i++) {
+      env.clock.tick(5 * 60_000);
+      await fireFocus(env);
+    }
+    assert.equal(env.reloadCalls, 0, 'still deferred throughout');
+    const phases = env.deferralReports.map((r) => r.phase);
+    assert.deepEqual(phases, ['started', 'suspected-wedge'], 'exactly two reports, in order');
+    assert.equal(env.deferralReports[1]?.deferrals, 4, 'wedge report carries the trigger count');
+  });
+
+  it('resets the deferral count after a deferred reload lands', async () => {
+    env.fetchResponse = { ok: true, status: 200, body: 'sha-newer-deploy' };
+    env.modal = 'open';
+    install(env, 'sha-running-bundle', 60_000, 2);
+
+    await fireFocus(env);
+    env.clock.tick(5 * 60_000);
+    await fireFocus(env);
+    assert.equal(env.deferralReports.length, 2, 'started + wedge at 2');
+
+    env.modal = 'none';
+    env.clock.tick(5 * 60_000);
+    await fireFocus(env);
+    assert.equal(env.reloadCalls, 1, 'reload landed');
+
+    // A fresh episode must start its count at 1, not continue from the last one,
+    // or the wedge threshold would fire immediately on the next deferral.
+    env.fetchResponse = { ok: true, status: 200, body: 'sha-newer-still' };
+    env.modal = 'open';
+    env.clock.tick(5 * 60_000);
+    await fireFocus(env);
+    assert.equal(env.deferralReports.length, 3, 'one new report');
+    assert.equal(env.deferralReports[2]?.phase, 'started');
+    assert.equal(env.deferralReports[2]?.deferrals, 1, 'count restarted');
+  });
+
   it('reloads when no document is available (nothing to protect)', async () => {
     // `documentTarget: undefined` only reaches the no-document branch because
     // this runner has no global `document` to fall back to. Assert that, or the
@@ -424,6 +488,8 @@ describe('installStaleBundleCheck', () => {
     assert.equal(env.reloadCalls, 0, 'still deferred after nine triggers');
     assert.equal(env.fetchCalls.length, 1, 'and never refetched');
     assert.equal(env.deferralReports.length, 1, 'reported once per episode, not per trigger');
+    assert.equal(env.deferralReports[0]?.phase, 'started');
+    assert.equal(env.deferralReports[0]?.blockedBy, 'cl-modalBackdrop', 'names the overlay that blocked it');
   });
 
   it('returns to fetching after a deferred reload finally lands', async () => {

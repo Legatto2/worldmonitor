@@ -21,6 +21,15 @@
 // never keep the issue open. To fix a slot, check a candidate with the first command above, paste the
 // line it prints after `paste:` into that slot's list below, and the next run drops the slot from the
 // issue. The issue closes itself once no slot needs attention.
+//
+// A channel entry also opts the slot into live video refresh. The audit reads the channel's /live page and
+// checks the video the channel has live right now instead of the channel embed; when that video is missing
+// from the slot and a pinned video sits ahead of the channel, the issue shows it under "Live now", ready to
+// paste over the dead pinned entry. The dashboard refresh (#8545, in progress) tries a resolved video
+// immediately before the channel entry that produced it, so entries ahead of the channel keep priority; until
+// it ships, the dashboard plays the channel embed. For a broadcaster that restarts its stream under
+// a new id, list only the channel, with no pinned id. Do not list a channel whose featured live is another
+// stream (a side camera, a press conference, a replay): the resolved video would be that stream.
 
 export const WEBCAM_SOURCES = {
   jerusalem: ['https://www.youtube.com/watch?v=zp6LNSoq000'],
@@ -127,9 +136,9 @@ export const LIVE_NEWS_SOURCES = {
   'abc-news': ['https://www.youtube.com/channel/UCBi2mrWuNuyYy4gbM6fU18Q'],
   'cbs-news': ['https://cbsn-us.cbsnstream.cbsnews.com/out/v1/55a8648e8f134e82a470f83d562deeca/master.m3u8'],
   'nbc-news': ['https://www.youtube.com/channel/UCeY0bbntWzzVIaj2z3QigXg'],
-  // cbcnewshd-f.akamaihd.net returned HTTP 404 (2026-09-14). The channel embed fails with player error
-  // 150, so this is the running live video; its id changes when CBC restarts the stream.
-  'cbc-news': ['https://www.youtube.com/watch?v=5vfaDsMhCF4'],
+  // cbcnewshd-f.akamaihd.net returned HTTP 404 (2026-09-14). CBC restarts its stream under new ids, so only
+  // the channel is listed: the audit resolves its live video, since the channel embed fails with player error 150.
+  'cbc-news': ['https://www.youtube.com/channel/UCuFFtHWoLl5fauMMD5Ww2jA'],
   // CTV News streams only in authenticated Canadian apps (2026-09-23, #8545).
   'ctv-news': [],
   // No 24/7 live Reuters publishes itself; the old wurl FAST hosts no longer resolve (2026-09-23, #8545).
@@ -150,17 +159,17 @@ export const LIVE_NEWS_SOURCES = {
     'https://www.youtube.com/channel/UCBgTP2LOFVPmq15W-RH-WXA',
   ],
   'ntv-turkey': ['https://www.youtube.com/watch?v=pqq5c6k70kk'],
-  // The official HLS is referer- or token-gated (403) and the channel embed fails with player error 150,
-  // so this is the running live video; its id changes when CNN TÜRK restarts the stream.
-  'cnn-turk': ['https://www.youtube.com/watch?v=ogMaukPITDE'],
+  // The official HLS is referer- or token-gated (403). CNN TÜRK restarts and retitles its "CANLI HABER" live,
+  // so only the channel is listed (its embed fails with player error 150; the audit resolves the live video).
+  'cnn-turk': ['https://www.youtube.com/channel/UCV6zcRug6Hqp1UX_FdyUeBg'],
   // Only scheduled shows, no 24/7 live (2026-09-23, #8545).
   'tv-rain': [],
   rt: ['https://rt-glb.rttv.com/dvr/rtnews/playlist.m3u8'],
   'tvp-info': ['https://www.youtube.com/watch?v=3jKb-uThfrg'],
   'telewizja-republika': ['https://www.youtube.com/watch?v=dzntyCTgJMQ'],
-  // Fragile: the channel embed fails with player error 150, and CNN Brasil runs each show as its own dated
-  // live video, so this one ends within hours (2026-09-24, #8545).
-  'cnn-brasil': ['https://www.youtube.com/watch?v=tnVsWgZ7H1U'],
+  // CNN Brasil runs each show as its own dated live video, so only the channel is listed; its embed fails with
+  // player error 150, and the audit resolves the running show (2026-09-24, #8545).
+  'cnn-brasil': ['https://www.youtube.com/channel/UCvdwhh_fDyWccR42-rReZLw'],
   // The channel's running live (eTz4XgOQaAE) is a street camera on Avenida Paulista, not the news channel;
   // its news shows are scheduled dated videos (2026-09-24, #8545).
   'jovem-pan': [],
@@ -170,12 +179,15 @@ export const LIVE_NEWS_SOURCES = {
   'band-jornalismo': [],
   'tn-argentina': ['https://www.youtube.com/watch?v=cb12KmMMDJA'],
   c5n: ['https://www.youtube.com/channel/UCFgk2Q2mVO1BklRQhSv6p0w'],
-  // milenio, noticias-caracol and t13: the channel embeds fail with player error 150, so these are the
-  // running live videos; their ids change when the broadcaster restarts the stream (2026-09-24, #8545).
+  // The channel embed fails with player error 150, so this is the running live video; its id changes when
+  // Milenio restarts the stream. The channel is not listed: its featured live was "Más Milenio", not this
+  // news stream (2026-09-24, #8545).
   milenio: ['https://www.youtube.com/watch?v=oPy8a-TCjzA'],
-  'noticias-caracol': ['https://www.youtube.com/watch?v=XE-HAP0KALo'],
+  // noticias-caracol and t13 restart their streams under new ids, so only the channel is listed; their embeds
+  // fail with player error 150, and the audit resolves the live video (2026-09-24, #8545).
+  'noticias-caracol': ['https://www.youtube.com/channel/UC2Xq2PK-got3Rtz9ZJ32hLQ'],
   ntn24: ['https://www.youtube.com/channel/UCEJs1fTF3KszRJGxJY14VrA'],
-  t13: ['https://www.youtube.com/watch?v=oy1dvCRd42s'],
+  t13: ['https://www.youtube.com/channel/UCsRnhjcUCR78Q3Ud6OXCTNg'],
   'dw-espanol': ['https://dwamdstream104.akamaized.net/hls/live/2015530/dwstream104/stream04/streamPlaylist.m3u8'],
   'rt-espanol': ['https://rt-esp.rttv.com/dvr/rtesp/playlist.m3u8'],
   // news.cgtn.com no longer resolves (2026-09-23, #8545).
@@ -186,9 +198,11 @@ export const LIVE_NEWS_SOURCES = {
   'ann-news': ['https://www.youtube.com/watch?v=coYw-eVU0Ks'],
   'ntv-news': ['https://www.youtube.com/watch?v=t9kwjZBLI-A'],
   // Fragile: the channel embed fails with player error 150, and CTi runs each news block as its own dated
-  // live video, so this one ends within hours (2026-09-24, #8545).
+  // live video, so this one ends within hours (2026-09-24, #8545). The channel is not listed: its /live page
+  // featured the next scheduled block (upcoming) while this one played.
   'cti-news': ['https://www.youtube.com/watch?v=-YExqG4Llcw'],
-  // The channel embed fails with player error 150; its id changes when WION restarts the stream.
+  // The channel embed fails with player error 150; its id changes when WION restarts the stream. The channel
+  // is not listed: its featured live was an event stream, not the 24/7 news (2026-09-24, #8545).
   wion: ['https://www.youtube.com/watch?v=X-7LAkvfA5s'],
   ndtv: ['https://ndtvindiaelemarchana.akamaized.net/hls/live/2003679/ndtvindia/master.m3u8'],
   // news.cgtn.com no longer resolves; the HLS is now on english-livebkali.cgtn.com. The channel embed fails
@@ -209,9 +223,9 @@ export const LIVE_NEWS_SOURCES = {
     'https://indiatodaylive.akamaized.net/hls/live/2014320/indiatoday/indiatodaylive/playlist.m3u8',
     'https://www.youtube.com/watch?v=sYZtOFzM78M',
   ],
-  // Fragile: the channel embed fails with player error 150, and ABP retitles and restarts its running live,
-  // so this id changes often (2026-09-24, #8545).
-  'abp-news': ['https://www.youtube.com/watch?v=YmpIDN5Bf3M'],
+  // ABP retitles and restarts its running live, so only the channel is listed; its embed fails with player
+  // error 150, and the audit resolves the live video (2026-09-24, #8545).
+  'abp-news': ['https://www.youtube.com/channel/UCRWFSbif-RFENbBrSiez1DA'],
   'al-hadath': ['https://av.alarabiya.net/alarabiapublish/alhadath.smil/playlist.m3u8'],
   'sky-news-arabia': ['https://live-stream.skynewsarabia.com/c-horizontal-channel/horizontal-stream/index.m3u8'],
   'trt-world': ['https://tv-trtworld.medya.trt.com.tr/master.m3u8'],
@@ -247,8 +261,9 @@ export const LIVE_NEWS_SOURCES = {
     'https://www.youtube.com/channel/UCAUHoE2Ykw0sguyi5AjhrjQ',
   ],
   africanews: ['https://www.youtube.com/channel/UC1_E8NeF5QHY2dtdLRBCCLA'],
-  // The channel embed fails with player error 150; its id changes when Channels restarts the stream.
-  'channels-tv': ['https://www.youtube.com/watch?v=d4zDorDl5UE'],
+  // Channels restarts its stream under new ids, so only the channel is listed; its embed fails with player
+  // error 150, and the audit resolves the live video (2026-09-24, #8545).
+  'channels-tv': ['https://www.youtube.com/channel/UCEXGDNclvmg6RW0vipJYsTQ'],
   'ktn-news': ['https://www.youtube.com/channel/UCKVsdeoHExltrWMuK0hOWmg'],
   // No reachable live found (2026-09-23, #8545).
   enca: [],
@@ -268,8 +283,9 @@ export const LIVE_NEWS_SOURCES = {
   // ERT's own space on Broadpeak, the old entry's vendor; the ertflix entry returned HTTP 404 (#8545).
   'ert-news': ['https://ert-ucdn.broadpeak-aas.com/bpk-tv/ERTNews/default/index.m3u8'],
   'france24-fr': ['https://www.youtube.com/watch?v=a47ckXKZjxI'],
-  // The channel embed fails with player error 150; its id changes when franceinfo restarts the stream.
-  'france-info': ['https://www.youtube.com/watch?v=NG7ZX42nZKc'],
+  // franceinfo restarts its stream under new ids, so only the channel is listed; its embed fails with player
+  // error 150, and the audit resolves the live video (2026-09-24, #8545).
+  'france-info': ['https://www.youtube.com/channel/UCO6K_kkdP-lnSCiO3tPx7WA'],
   // The HLS is embedded on bfmtv.com. The channel embed currently plays BFM2, not the main feed
   // (2026-09-24, #8545).
   bfmtv: [
