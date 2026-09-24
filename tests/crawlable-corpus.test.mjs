@@ -2118,6 +2118,33 @@ describe('crawlable corpus generator', () => {
     }
   });
 
+  it('names tracker and reference sources in reader terms, keeping repo paths as provenance attributes', async () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'wm-source-lines-'));
+    try {
+      await buildCorpus({ rootDir: repoRoot, outDir, baseUrl: 'https://www.worldmonitor.app' });
+      const visibleText = (html) => html
+        .replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ')
+        .replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ');
+      for (const [page, expected] of [
+        ['chokepoints/index.html', /Sources: World Monitor weekly pulse snapshot and World Monitor chokepoint registry/],
+        ['chokepoints/index.html', /Baseline source: U\.S\. EIA World Oil Transit Chokepoints \(2023\)/],
+        ['crises/index.html', /Scope source:\s+World Monitor crisis registry/],
+        ['chokepoints/strait-of-hormuz/index.html', /World Monitor chokepoint registry and trade-route reference/],
+        ['crises/red-sea-security/index.html', /World Monitor weekly pulse snapshot/],
+        ['tools/signal-convergence/index.html', /World Monitor weekly pulse snapshot/],
+      ]) {
+        const html = read(outDir, page);
+        const text = visibleText(html);
+        assert.doesNotMatch(text, /docs\/snapshots\/|src\/config\/|crawlable-live-pulse|shared\/[\w-]+\.json|scripts\/[\w-]+\.mjs/, `${page} shows a repository path to readers`);
+        assert.match(text, expected, `${page} names its source in reader terms`);
+        assert.match(html, /data-snapshot-source="(?:docs\/snapshots\/|src\/config\/|shared\/|scripts\/)[^"]+"/, `${page} keeps the repo path as provenance`);
+      }
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('builds a non-trivial static corpus with canonical raw HTML pages', async () => {
     const outDir = mkdtempSync(join(tmpdir(), 'wm-crawlable-corpus-'));
     try {
