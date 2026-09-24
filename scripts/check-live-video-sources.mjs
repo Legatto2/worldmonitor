@@ -36,7 +36,7 @@ const PROXY_ENV = 'LIVE_VIDEO_AUDIT_PROXY_URL';
 const BATCH_SIZE_ENV = 'LIVE_VIDEO_BATCH_SIZE';
 /** The most players LIVE_VIDEO_BATCH_SIZE may put on one page. */
 const MAX_BATCH_SIZE = 16;
-const { parseProxyConfig } = createRequire(import.meta.url)('./_proxy-utils.cjs');
+const { parseProxyConfigForAttempt } = createRequire(import.meta.url)('./_proxy-utils.cjs');
 
 const USAGE = `Usage: npm run live-video:check -- <entry> [<entry> ...]
        npm run live-video:check -- --slot webcams/<id>
@@ -390,8 +390,10 @@ export async function probeYouTubeBatches(candidates, {
 /**
  * Reads a proxy for the YouTube browser in any shape the relay's parser accepts. The returned `host` is the
  * only part of it that may be printed. Errors name the variable, never the value: it carries the credential.
+ * `attempt` picks the proxy session: a Decodo sticky port moves to the next sticky session per attempt
+ * (parseProxyConfigForAttempt), so a retry can leave a dead exit; any other route is the same for every attempt.
  */
-export function parseAuditProxy(raw) {
+export function parseAuditProxy(raw, attempt = 0) {
   const value = String(raw ?? '').trim();
   const invalid = () => new Error(`${PROXY_ENV} is not a proxy URL: expected http(s)://user:pass@host:port, user:pass@host:port or [http(s)://]host:port:user:pass`);
   // The relay's parser reads any other scheme as the user of a user:pass@host:port value.
@@ -401,7 +403,7 @@ export function parseAuditProxy(raw) {
   // after the scheme and let the scheme decide TLS.
   const rest = scheme ? value.slice(scheme.length + 3) : '';
   const schemedColonForm = scheme && !rest.includes('@') && rest.split(':').length >= 4;
-  const config = schemedColonForm ? parseProxyConfig(rest) : parseProxyConfig(value);
+  const config = parseProxyConfigForAttempt(schemedColonForm ? rest : value, attempt);
   if (schemedColonForm && config) config.tls = scheme === 'https';
   if (!config?.host || !Number.isInteger(config.port) || config.port <= 0 || config.port > 65_535) throw invalid();
   const proxy = { server: `${config.tls ? 'https' : 'http'}://${config.host}:${config.port}` };
@@ -1060,16 +1062,28 @@ export async function runCli(argv, {
     return 2;
   }
   if (proxy) write(`live-video: YouTube players go through the proxy at ${proxy.host}.`);
+  const rawProxy = String(env[PROXY_ENV] ?? '').trim();
+  // Channel pages run first. A page that fails at the proxy moves them to the next proxy session; the browser then
+  // launches on the session they ended on, so the canaries and every slot share one exit that was just seen working.
+  const session = { current: 0 };
+  const proxyFor = (attempt) => (proxy && attempt > 0 ? parseAuditProxy(rawProxy, attempt) : proxy);
   return run(argv, {
     write,
     // An alone re-check passes its own batchSize of 1, which wins over the configured size.
-    probeYouTube: (candidates, options = {}) => probeWithBrowser(candidates, { batchSize, ...options, proxy }),
+    probeYouTube: (candidates, options = {}) => probeWithBrowser(candidates, { batchSize, ...options, proxy: proxyFor(session.current) }),
     // Channel pages go through the browser's proxy: YouTube walls datacenter IPs, a GitHub runner's included.
-    resolveChannels: (channelIds, { budgetMs } = {}) => resolveChannelsLive(channelIds, {
-      fetchPage: (channelId) => fetchChannelPage(channelId, { proxy: proxy?.config ?? null }),
-      concurrency: RESOLVE_CONCURRENCY,
-      budgetMs,
-    }),
+    resolveChannels: async (channelIds, { budgetMs } = {}) => {
+      const results = await resolveChannelsLive(channelIds, {
+        fetchPage: (channelId, { attempt = 0 } = {}) => fetchChannelPage(channelId, { proxy: proxyFor(attempt)?.config ?? null }),
+        concurrency: RESOLVE_CONCURRENCY,
+        budgetMs,
+        session,
+      });
+      if (proxy && session.current > 0) {
+        write(`live-video: a proxy exit failed; channel pages and YouTube players moved to proxy session ${session.current}.`);
+      }
+      return results;
+    },
   });
 }
 

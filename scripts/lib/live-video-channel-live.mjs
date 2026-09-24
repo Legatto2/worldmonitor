@@ -8,12 +8,14 @@
 // Every result is one of:
 //   { status: 'live', reason: null, videoId, channelId, title, playableInEmbed: true }
 //   { status: 'not-live', reason: 'not-live' | 'upcoming' | 'not-embeddable', videoId, channelId, title }
-//   { status: 'unreadable', reason, videoId: null, channelId, title: null, detail? }
+//   { status: 'unreadable', reason, videoId: null, channelId, title: null, detail?, proxyFailure? }
 // `title` is for logs and the audit line only; nothing that publishes ids may publish it.
+// `proxyFailure: true` marks a page the proxy exit failed to fetch (CONNECT refused, tunnel or response timeout,
+// a dropped proxy connection), as opposed to a page YouTube served: only that kind moves to another exit.
 
 import { createRequire } from 'node:module';
 
-const { proxyFetch } = createRequire(import.meta.url)('../_proxy-utils.cjs');
+const { parseProxyConfigForAttempt, proxyFetch } = createRequire(import.meta.url)('../_proxy-utils.cjs');
 
 // Duplicated from src/services/live-video/model.ts, which is TypeScript and cannot be imported here.
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
@@ -24,6 +26,10 @@ export const CHANNEL_PAGE_TIMEOUT_MS = 15_000;
 /** A real /live page is about 1.2 MB before compression; anything past this is not a channel page. */
 export const CHANNEL_PAGE_MAX_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 2;
+/** A channel whose page failed at the proxy is fetched again on a fresh exit at most this many times. */
+export const MAX_PROXY_RETRIES = 2;
+/** proxyFetch failure stages that happen before YouTube answers (scripts/_proxy-utils.cjs recordProxyFailure). */
+const PROXY_STAGES = new Set(['proxy_connection', 'proxy_connect', 'target_tls']);
 const YOUTUBE_HOSTS = new Set(['www.youtube.com', 'youtube.com', 'consent.youtube.com']);
 const CHANNEL_PAGE_BASE = 'https://www.youtube.com/channel';
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
@@ -145,6 +151,19 @@ function redact(text, proxy) {
 const isTimeout = (error) => error?.name === 'TimeoutError'
   || /^(?:proxy fetch timeout|CONNECT tunnel timeout)$/.test(String(error?.message ?? ''));
 
+/** A fetch that failed at the proxy exit rather than at YouTube: another exit may well succeed. */
+const isProxyFailure = (error) => error?.proxyConnect === true
+  || PROXY_STAGES.has(error?.proxyFailure?.stage)
+  || /^(?:proxy fetch timeout|CONNECT tunnel timeout)$/.test(String(error?.message ?? ''));
+
+/**
+ * The proxy route for one attempt, from the raw proxy value (any form parseProxyConfig reads). A Decodo sticky port
+ * moves to the next sticky session per attempt, so a retry leaves a dead exit; any other route is returned unchanged.
+ */
+export function proxyForAttempt(raw, attempt = 0) {
+  return raw ? parseProxyConfigForAttempt(String(raw).trim(), attempt) : null;
+}
+
 /** A response body as text, refusing one past `maxBytes` (streamed when the response exposes a reader). */
 async function cappedText(response, maxBytes) {
   const declared = Number(response.headers?.get?.('content-length'));
@@ -171,17 +190,21 @@ async function cappedText(response, maxBytes) {
 }
 
 /**
- * Fetches `channelId`'s /live page and reads it. `proxy` is a parseProxyConfig object ({ host, port, auth, tls });
- * without one the fetch is direct (a local run). Redirects are followed by hand, at most twice, and only to YouTube.
+ * Fetches `channelId`'s /live page and reads it, through `proxyUrl` (the raw proxy value, routed for `attempt` by
+ * proxyForAttempt) or through `proxy` (a parseProxyConfig object, used as given). Without either the fetch is direct
+ * (a local run). Redirects are followed by hand, at most twice, and only to YouTube.
  * Never throws: every failure is an unreadable result whose `detail` carries no proxy credential.
  */
 export async function fetchChannelLivePage(channelId, {
-  proxy = null,
+  proxyUrl = null,
+  attempt = 0,
+  proxy: givenProxy = null,
   proxyFetchImpl = proxyFetch,
   fetchImpl = (...args) => globalThis.fetch(...args),
   timeoutMs = CHANNEL_PAGE_TIMEOUT_MS,
   maxBytes = CHANNEL_PAGE_MAX_BYTES,
 } = {}) {
+  const proxy = givenProxy ?? proxyForAttempt(proxyUrl, attempt);
   let url;
   try {
     url = channelLiveUrl(channelId);
@@ -216,32 +239,55 @@ export async function fetchChannelLivePage(channelId, {
       return readChannelLivePage(await response.body(), channelId);
     }
   } catch (error) {
-    return unreadable(channelId, isTimeout(error) ? 'timeout' : 'fetch-error', redact(error?.message ?? error, proxy));
+    const result = unreadable(channelId, isTimeout(error) ? 'timeout' : 'fetch-error', redact(error?.message ?? error, proxy));
+    if (proxy && isProxyFailure(error)) result.proxyFailure = true;
+    return result;
   }
 }
 
 /**
- * Resolves every channel once, `concurrency` pages at a time. A channel not started within `budgetMs` of the first
- * one reads unreadable/skipped without a fetch, so the whole pass takes at most budgetMs plus one page's worst case.
- * Never throws: a fetchPage that throws is that channel's unreadable result.
+ * Resolves every channel once, `concurrency` pages at a time, calling `fetchPage(channelId, { attempt })`. A page that
+ * failed at the proxy (`proxyFailure`) moves the shared `session.current` to the next proxy session and is fetched
+ * again there, at most MAX_PROXY_RETRIES times; later channels start on that session, so one dead exit costs one
+ * failed fetch per worker rather than one per channel. A page YouTube served (a wall, a parse error, a mismatch) is
+ * never re-fetched. No fetch or retry starts after `budgetMs`: a channel not started by then reads unreadable/skipped,
+ * so the pass takes at most budgetMs plus one page's worst case. Never throws.
  */
-export async function resolveChannelsLive(channelIds, { fetchPage, concurrency = 4, budgetMs = Number.POSITIVE_INFINITY, now = Date.now } = {}) {
+export async function resolveChannelsLive(channelIds, {
+  fetchPage,
+  concurrency = 4,
+  budgetMs = Number.POSITIVE_INFINITY,
+  now = Date.now,
+  session = { current: 0 },
+} = {}) {
   const queue = [...new Set(channelIds)];
   const results = new Map(queue.map((id) => [id, null]));
   const startedAt = now();
+  const withinBudget = () => now() - startedAt < budgetMs;
   let next = 0;
+  const fetchOnce = async (id, attempt) => {
+    try {
+      return await fetchPage(id, { attempt });
+    } catch (error) {
+      return unreadable(id, 'fetch-error', String(error?.message ?? error));
+    }
+  };
   const worker = async () => {
     while (next < queue.length) {
       const id = queue[next++];
-      if (now() - startedAt >= budgetMs) {
+      if (!withinBudget()) {
         results.set(id, unreadable(id, 'skipped'));
         continue;
       }
-      try {
-        results.set(id, await fetchPage(id));
-      } catch (error) {
-        results.set(id, unreadable(id, 'fetch-error', String(error?.message ?? error)));
+      let attempt = session.current;
+      let result = await fetchOnce(id, attempt);
+      for (let retry = 1; result?.proxyFailure === true && retry <= MAX_PROXY_RETRIES && withinBudget(); retry++) {
+        // Another worker may already have moved past this exit; never move backwards.
+        session.current = Math.max(session.current, attempt + 1);
+        attempt = session.current;
+        result = await fetchOnce(id, attempt);
       }
+      results.set(id, result);
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, queue.length)) }, worker));

@@ -1709,6 +1709,61 @@ describe('audit proxy (LIVE_VIDEO_AUDIT_PROXY_URL)', () => {
     assert.doesNotMatch(out.join('\n'), LEAK);
   });
 
+  it('moves a Decodo sticky proxy to the next session per attempt, in every shape, and leaves other routes alone', () => {
+    assert.equal(parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`, 2).server, 'https://gate.decodo.com:10003');
+    assert.equal(parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`, 2).config.port, 10003);
+    assert.equal(parseAuditProxy(`http://gate.decodo.com:10001:${USER}:${PASS}`, 1).server, 'http://gate.decodo.com:10002');
+    assert.equal(parseAuditProxy(`${USER}:${PASS}@gate.decodo.com:10005`, 1).server, 'https://gate.decodo.com:10006');
+    assert.equal(parseAuditProxy(`gate.decodo.com:7000:${USER}:${PASS}`, 3).server, 'https://gate.decodo.com:7000');
+    assert.equal(parseAuditProxy(`http://${USER}:${PASS}@proxy.example.net:10001`, 3).server, 'http://proxy.example.net:10001');
+    assert.deepEqual(parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`), parseAuditProxy(`gate.decodo.com:10001:${USER}:${PASS}`, 0));
+  });
+
+  it('moves channel pages to the next sticky session when the exit fails, and launches the browser on the session that worked', async () => {
+    const out = [];
+    const pages = [];
+    const launches = [];
+    const code = await runCli(['--all'], {
+      env: { GITHUB_ACTIONS: 'true', LIVE_VIDEO_AUDIT_PROXY_URL: `gate.decodo.com:10001:${USER}:${PASS}` },
+      write: (line) => out.push(line),
+      fetchChannelPage: async (channelId, options) => {
+        pages.push(options.proxy.port);
+        return options.proxy.port === 10001
+          ? { status: 'unreadable', reason: 'fetch-error', videoId: null, channelId, title: null, proxyFailure: true, detail: 'Proxy CONNECT: HTTP/1.1 522 Server Error' }
+          : { status: 'live', reason: null, videoId: 'abc123DEF45', channelId, title: 'Live', playableInEmbed: true };
+      },
+      probeWithBrowser: async (candidates, options) => { launches.push(options.proxy.server); return candidates.map(() => ({})); },
+      run: async (_argv, options) => {
+        const results = await options.resolveChannels(['UCNye-wNBqNL5ZzHSJj3l8Bg'], { budgetMs: 60_000 });
+        assert.equal(results.get('UCNye-wNBqNL5ZzHSJj3l8Bg').status, 'live');
+        await options.probeYouTube([{ kind: 'video', videoId: 'a' }]);
+        await options.probeYouTube([{ kind: 'video', videoId: 'b' }], { batchSize: 1 });
+        return 0;
+      },
+    });
+    assert.equal(code, 0);
+    assert.deepEqual(pages, [10001, 10002]);
+    assert.deepEqual(launches, ['https://gate.decodo.com:10002', 'https://gate.decodo.com:10002'], 'canaries, slots and alone checks share the healthy exit');
+    assert.match(out.join('\n'), /proxy session 1/);
+    assert.doesNotMatch(out.join('\n'), LEAK);
+  });
+
+  it('keeps the browser on the configured session when no channel page failed at the proxy', async () => {
+    const launches = [];
+    await runCli(['--all'], {
+      env: { LIVE_VIDEO_AUDIT_PROXY_URL: `gate.decodo.com:10001:${USER}:${PASS}` },
+      write: () => {},
+      fetchChannelPage: async (channelId) => ({ status: 'unreadable', reason: 'bot-wall', videoId: null, channelId, title: null }),
+      probeWithBrowser: async (candidates, options) => { launches.push(options.proxy.server); return candidates.map(() => ({})); },
+      run: async (_argv, options) => {
+        await options.resolveChannels(['UCNye-wNBqNL5ZzHSJj3l8Bg'], { budgetMs: 60_000 });
+        await options.probeYouTube([{ kind: 'video', videoId: 'a' }]);
+        return 0;
+      },
+    });
+    assert.deepEqual(launches, ['https://gate.decodo.com:10001']);
+  });
+
   it('fetches channel pages directly when no proxy is set locally', async () => {
     const pages = [];
     await runCli(['--all'], {

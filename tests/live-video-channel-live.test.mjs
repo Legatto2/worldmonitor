@@ -5,6 +5,7 @@ import {
   CHANNEL_PAGE_TIMEOUT_MS,
   channelLiveUrl,
   fetchChannelLivePage,
+  proxyForAttempt,
   readChannelLivePage,
   resolveChannelsLive,
 } from '../scripts/lib/live-video-channel-live.mjs';
@@ -287,6 +288,125 @@ describe('fetchChannelLivePage', () => {
       const result = await fetchChannelLivePage(CHANNEL, { fetchImpl: direct(response(200, livePage())).fetchImpl, maxBytes: 100 });
       assert.deepEqual([result.status, result.reason], ['unreadable', 'fetch-error']);
     });
+  });
+});
+
+describe('proxy session rotation', () => {
+  const USER = 'probe-user-7Qx';
+  const PASS = 'S3cret-Pa55-zK9';
+  const LEAK = new RegExp(`${USER}|${PASS}|${encodeURIComponent(PASS)}`);
+  const RAW = `gate.decodo.com:10001:${USER}:${PASS}`;
+  const okPage = (html) => ({ ok: true, status: 200, location: '', buffer: Buffer.from(html) });
+  const connectRefused = () => Object.assign(new Error(`Proxy CONNECT: HTTP/1.1 522 Server Error for ${USER}:${PASS}`), { proxyConnect: true, status: 522 });
+  /** A fake proxyFetch whose Decodo sticky session 10001 is dead: CONNECT fails there and works on any other port. */
+  function deadFirstSession(html = livePage()) {
+    const ports = [];
+    const proxyFetchImpl = async (_url, proxy) => {
+      ports.push(proxy.port);
+      if (proxy.port === 10001) throw connectRefused();
+      return okPage(html);
+    };
+    return { ports, proxyFetchImpl };
+  }
+
+  it('builds each attempt\'s route from the raw proxy value, moving only a Decodo sticky port', () => {
+    assert.deepEqual(proxyForAttempt(RAW, 0), { host: 'gate.decodo.com', port: 10001, auth: `${USER}:${PASS}`, tls: true });
+    assert.equal(proxyForAttempt(RAW, 2).port, 10003);
+    assert.equal(proxyForAttempt(`gate.decodo.com:7000:${USER}:${PASS}`, 3).port, 7000, 'a rotating port has no sessions to move');
+    assert.equal(proxyForAttempt('', 1), null);
+  });
+
+  it('reads a proxy failure as unreadable with proxyFailure set, and a page problem without it', async () => {
+    const { proxyFetchImpl } = deadFirstSession();
+    const failed = await fetchChannelLivePage(CHANNEL, { proxyUrl: RAW, attempt: 0, proxyFetchImpl });
+    assert.deepEqual([failed.status, failed.reason, failed.proxyFailure], ['unreadable', 'fetch-error', true]);
+    assert.doesNotMatch(JSON.stringify(failed), LEAK);
+    const recovered = await fetchChannelLivePage(CHANNEL, { proxyUrl: RAW, attempt: 1, proxyFetchImpl });
+    assert.equal(recovered.status, 'live');
+    for (const message of ['proxy fetch timeout', 'CONNECT tunnel timeout']) {
+      const timedOut = await fetchChannelLivePage(CHANNEL, { proxyUrl: RAW, proxyFetchImpl: async () => { throw new Error(message); } });
+      assert.equal(timedOut.proxyFailure, true, message);
+    }
+    const hangUp = await fetchChannelLivePage(CHANNEL, {
+      proxyUrl: RAW,
+      proxyFetchImpl: async () => { throw Object.assign(new Error('socket hang up'), { proxyFailure: { stage: 'proxy_connection' } }); },
+    });
+    assert.equal(hangUp.proxyFailure, true);
+    const walled = await fetchChannelLivePage(CHANNEL, { proxyUrl: RAW, proxyFetchImpl: async () => okPage(BOT_WALL_PAGE) });
+    assert.deepEqual([walled.reason, walled.proxyFailure], ['bot-wall', undefined]);
+    const limited = await fetchChannelLivePage(CHANNEL, { proxyUrl: RAW, proxyFetchImpl: async () => ({ ok: false, status: 429, location: '', buffer: Buffer.alloc(0) }) });
+    assert.deepEqual([limited.reason, limited.proxyFailure], ['http-429', undefined], 'an origin status is not a proxy failure');
+    const direct = await fetchChannelLivePage(CHANNEL, { fetchImpl: async () => { throw new Error('proxy fetch timeout'); } });
+    assert.equal(direct.proxyFailure, undefined, 'without a proxy nothing is a proxy failure');
+  });
+
+  it('resolves a channel on the next sticky session when the first one fails CONNECT', async () => {
+    const { ports, proxyFetchImpl } = deadFirstSession();
+    const session = { current: 0 };
+    const results = await resolveChannelsLive([CHANNEL], {
+      fetchPage: (id, { attempt }) => fetchChannelLivePage(id, { proxyUrl: RAW, attempt, proxyFetchImpl }),
+      session,
+    });
+    assert.equal(results.get(CHANNEL).status, 'live');
+    assert.deepEqual(ports, [10001, 10002]);
+    assert.equal(session.current, 1, 'the healthy session is left for the next fetch');
+    assert.doesNotMatch(JSON.stringify([...results.values()]), LEAK);
+  });
+
+  it('moves every later channel to the healthy session instead of paying the dead one again', async () => {
+    const { ports, proxyFetchImpl } = deadFirstSession();
+    const ids = [CHANNEL, OTHER_CHANNEL, 'UCIALMKvObZNtJ6AmdCLP7Lg'];
+    const pages = { [OTHER_CHANNEL]: livePage({ player: playerResponse({ channelId: OTHER_CHANNEL }) }) };
+    await resolveChannelsLive(ids, {
+      fetchPage: (id, { attempt }) => fetchChannelLivePage(id, {
+        proxyUrl: RAW,
+        attempt,
+        proxyFetchImpl: async (url, proxy, options) => (pages[id] && proxy.port !== 10001 ? okPage(pages[id]) : proxyFetchImpl(url, proxy, options)),
+      }),
+      concurrency: 1,
+    });
+    assert.deepEqual(ports.filter((port) => port === 10001).length, 1, 'only the first fetch hit the dead session');
+  });
+
+  it('retries a proxy failure at most twice, then keeps it unreadable', async () => {
+    const attempts = [];
+    const fetchPage = async (id, { attempt }) => {
+      attempts.push(attempt);
+      return { status: 'unreadable', reason: 'fetch-error', videoId: null, channelId: id, title: null, proxyFailure: true };
+    };
+    const results = await resolveChannelsLive([CHANNEL], { fetchPage });
+    assert.deepEqual(attempts, [0, 1, 2]);
+    assert.deepEqual([results.get(CHANNEL).status, results.get(CHANNEL).reason], ['unreadable', 'fetch-error']);
+  });
+
+  it('never rotates for a page problem: a bot wall, a parse error or a channel mismatch is fetched once', async () => {
+    for (const reason of ['bot-wall', 'parse-error', 'channel-mismatch', 'consent-wall', 'http-429']) {
+      const attempts = [];
+      const session = { current: 0 };
+      await resolveChannelsLive([CHANNEL], {
+        fetchPage: async (id, { attempt }) => { attempts.push(attempt); return { status: 'unreadable', reason, videoId: null, channelId: id, title: null }; },
+        session,
+      });
+      assert.deepEqual([attempts, session.current], [[0], 0], reason);
+    }
+  });
+
+  it('starts no retry once the budget is used up', async () => {
+    let clock = 0;
+    const attempts = [];
+    const results = await resolveChannelsLive([CHANNEL, OTHER_CHANNEL], {
+      fetchPage: async (id, { attempt }) => {
+        attempts.push([id, attempt]);
+        clock += 1_000;
+        return { status: 'unreadable', reason: 'timeout', videoId: null, channelId: id, title: null, proxyFailure: true };
+      },
+      concurrency: 1,
+      budgetMs: 1_500,
+      now: () => clock,
+    });
+    assert.deepEqual(attempts, [[CHANNEL, 0], [CHANNEL, 1]]);
+    assert.equal(results.get(CHANNEL).reason, 'timeout');
+    assert.equal(results.get(OTHER_CHANNEL).reason, 'skipped');
   });
 });
 
