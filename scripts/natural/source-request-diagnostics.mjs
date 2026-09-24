@@ -20,7 +20,7 @@ const listeners = [
       requestCount: state.progress.requestCount + 1,
       requestSendObserved: false,
       responseHeadersObserved: false,
-      wireBodyBytes: 0,
+      wireBodyBytes: null,
       firstBodyByteMs: null,
       lastBodyByteMs: null,
       wireBodyComplete: false,
@@ -37,7 +37,7 @@ const listeners = [
     const state = requests.get(request);
     if (!state?.active || state.request !== request) return;
     const elapsed = Math.round(performance.now() - state.started);
-    state.progress.wireBodyBytes += chunk.byteLength;
+    state.progress.wireBodyBytes = (state.progress.wireBodyBytes ?? 0) + chunk.byteLength;
     state.progress.firstBodyByteMs ??= elapsed;
     state.progress.lastBodyByteMs = elapsed;
   }],
@@ -49,6 +49,7 @@ const listeners = [
 // Native request identities keep pooled connections and concurrent fetches separate.
 // Counters cover the latest redirect hop and encoded payload bytes. A local send
 // observation does not prove remote receipt; wire completion does not prove JSON validity.
+// Bytes remain unknown until a chunk is observed: not all transports emit chunk events.
 export async function withSourceRequestDiagnostics(operation) {
   const state = { active: true, started: performance.now(), request: null, progress: { observed: false, requestCount: 0 } };
   if (activeScopes++ === 0) {

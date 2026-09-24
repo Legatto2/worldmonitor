@@ -45,7 +45,7 @@ test('concurrent requests to one origin keep complete, incomplete and header-wai
   assert.equal(headers.error, 'TimeoutError');
   assert.equal(headers.progress.requestSendObserved, true);
   assert.equal(headers.progress.responseHeadersObserved, false);
-  assert.equal(headers.progress.wireBodyBytes, 0);
+  assert.equal(headers.progress.wireBodyBytes, null);
   assert.equal(headers.progress.firstBodyByteMs, null);
   assert.equal(headers.progress.lastBodyByteMs, null);
   assert.equal(channel('undici:request:create').hasSubscribers, false);
@@ -95,4 +95,20 @@ test('unobserved transports remain unknown and throwing operations release subsc
   for (const name of ['request:create', 'client:sendHeaders', 'request:headers', 'request:bodyChunkReceived', 'request:trailers']) {
     assert.equal(channel(`undici:${name}`).hasSubscribers, false, name);
   }
+});
+
+test('request events without body-chunk telemetry leave byte measurements unknown', async () => {
+  const progress = await withSourceRequestDiagnostics(snapshot => {
+    const request = {};
+    channel('undici:request:create').publish({ request });
+    channel('undici:request:headers').publish({ request });
+    channel('undici:request:trailers').publish({ request });
+    return snapshot();
+  });
+  assert.equal(progress.observed, true);
+  assert.equal(progress.responseHeadersObserved, true);
+  assert.equal(progress.wireBodyComplete, true);
+  assert.equal(progress.wireBodyBytes, null);
+  assert.equal(progress.firstBodyByteMs, null);
+  assert.equal(progress.lastBodyByteMs, null);
 });
