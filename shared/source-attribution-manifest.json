@@ -4666,6 +4666,9 @@
           "path": "api/download.js"
         },
         {
+          "path": "api/health.js"
+        },
+        {
           "path": "scripts/build-accuracy-page.mjs"
         },
         {
