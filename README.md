@@ -1,4 +1,58 @@
-# World Monitor
+# World Monitor + God's Eye — Local Intelligence Workspace
+
+This fork combines the World Monitor dashboard with an on-demand God's Eye 3D globe, server-side Shodan tools, public CCTV snapshots, and local geospatial analysis.
+
+## Start locally
+
+Use **Node.js 24** and run these commands from the repository root:
+
+```powershell
+npm ci
+npm --prefix blog-site ci
+npm --prefix vendor/gods-eye-view ci
+node scripts/unified/start.mjs --env-file C:\path\to\your\existing\.env
+```
+
+The environment file is optional; omit `--env-file` when credentials are already supplied by your environment or you want keyless operation. The launcher can read `SHODAN_API_KEY`, `GOOGLE_MAPS_API_KEY`, and `CESIUM_ION_TOKEN` from an existing file without copying it into this repository. Keep secret files out of Git. Shodan credentials stay server-side; browser-used map credentials require provider restrictions.
+
+Open **[localhost:4480](http://localhost:4480)** and click **3D OPERATIONS**. The dashboard and globe use loopback ports **4480** and **4481**. Keep the launcher running; press **Ctrl+C** to stop both servers. This is a local development workspace, not a public deployment setup.
+
+## Features in this fork
+
+| Feature | Available behavior |
+| --- | --- |
+| Combined workspace | World Monitor dashboard plus God's Eye Cesium view, with location navigation in both directions. |
+| Shared map observations | Earthquakes, news, natural events, military flights, fires, outages, and locally imported records, where coordinates are available. |
+| Shodan | Host lookup, paginated search, account/credit status, count/facet summaries, bounded host history, network/HTTP/TLS/indexed CVE details, host drill-down, and JSON export. Open it from the 3D toolbar. |
+| Public CCTV | Search the operator catalog, fly to cameras, and click their markers to reopen the snapshot viewer. Images refresh periodically while viewing. |
+| Location analysis | Import GeoJSON Points or CSV, filter by date or distance, inspect chronologically ordered records on the globe, export CSV/GeoJSON, and clear imported data. |
+| Local interface | Pro promotions and account controls are suppressed; hosted-only services show local configuration availability. |
+| Local earthquake feed | USGS magnitude 2.5+ past-day observations without a separately hosted seed cache. |
+
+## Scope and limits
+
+- Shodan requests are manual, subject to your plan and the local 30-upstream-requests/hour safeguard. Search supports pages 1–100, up to 100 observations per page. IP locations are approximate and indexed observations may be outdated.
+- CCTV feeds are operator-provided snapshots, **not continuous video**. Some operators return offline images. A Shodan result does not automatically provide a playable camera stream.
+- Location analysis accepts at most **500 records / 2 MB**. Data stays in browser memory and the local globe; clearing it or reloading removes the imported project. Use your own or authorized data.
+- Other World Monitor hosted/paid APIs still need their own configuration. Hiding account prompts does not enable hosted entitlements.
+- Creepy inspired the local map/filter/export workflow; its legacy runtime and social-account collectors are not installed. GHunt is not integrated. Geolocation-OSINT is a reviewed resource directory, not an installed application.
+
+See **[UNIFIED.md](UNIFIED.md)** for architecture, configuration, provenance, and usage details.
+
+## Verification and licensing
+
+The integrated implementation passed both Vite builds, TypeScript and architecture checks, and 17 focused tests. Browser checks covered Shodan queries, shared map locations, CCTV marker interaction, and local import/filter/export. This does not imply every external provider or the full upstream CI pipeline has been verified.
+
+World Monitor retains its **[AGPL-3.0 license](LICENSE)**. Vendored God's Eye retains its **[MIT license](vendor/gods-eye-view/LICENSE)**. Maps, imagery, and other datasets retain their separate provider terms.
+
+---
+
+## Upstream World Monitor documentation
+
+The material below documents the upstream project. Its hosted sites, downloads, packages, and promotional links are upstream offerings; they do not distribute this fork's combined local workspace. Use the local startup instructions above for this fork.
+
+
+## World Monitor
 
 [简体中文](README.zh-CN.md) | [日本語](README.ja-JP.md) | [Русский](README.ru.md)
 
