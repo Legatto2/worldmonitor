@@ -98,9 +98,13 @@ test('built welcome page ships the real hero in #root before JavaScript', { skip
   assert.ok(faqStart >= 0, 'the FAQ section must be prerendered');
   const faqContent = rootContent.slice(faqStart);
   assert.match(faqContent, /href="\/compare\/liveuamap-alternatives\/"[^>]*>worldmonitor\.app\/compare\/liveuamap-alternatives<\/a>/);
-  assert.match(rootContent, /href="\/sources\/\?utm_source=welcome-hero"/);
-  assert.match(rootContent, /href="\/sources\/\?utm_source=welcome-depth"/);
-  assert.match(rootContent, /href="\/sources\/\?utm_source=welcome-footer"[^>]*>Sources<\/a>/);
+  // Untagged since #8603: middleware 308s utm_* away, so every one of these
+  // was a redirect hop. Each link is still identified individually, by the
+  // Umami target or link text that replaced its utm tag as the attribution.
+  assert.match(rootContent, /href="\/sources\/"[^>]*data-umami-event-target="welcome-sources-proof"/);
+  assert.match(rootContent, /href="\/sources\/"[^>]*data-umami-event-target="welcome-sources-depth"/);
+  assert.match(rootContent, /href="\/sources\/"[^>]*>Sources<\/a>/);
+  assert.doesNotMatch(rootContent, /href="\/sources\/\?/);
   assert.match(rootContent, /Map layer types/);
   const navContent = rootContent.slice(
     rootContent.indexOf('<nav'),
@@ -108,7 +112,7 @@ test('built welcome page ships the real hero in #root before JavaScript', { skip
   );
   assert.match(navContent, /href="\/blog\/"/);
   assert.match(navContent, />Blog<\/a>/);
-  assert.match(navContent, /href="\/sources\/\?utm_source=welcome-nav"[^>]*>Attributed providers<\/a>/);
+  assert.match(navContent, /href="\/sources\/"[^>]*>Attributed providers<\/a>/);
   assert.match(navContent, /id="welcome-tablet-navigation"/);
   assert.match(navContent, />Menu</);
   const headlineIndex = rootContent.indexOf('By the time it&#x27;s news,');
@@ -129,17 +133,17 @@ test('built welcome page prerenders task routes and agent discovery links', { sk
   assert.ok(liveIndex > taskIndex, 'live proof should follow the task routes');
 
   const taskLinks = [
-    ['crises', 'task-verify', 'welcome-task-verify'],
-    ['chokepoints', 'task-chokepoint', 'welcome-task-chokepoint'],
-    ['countries', 'task-country-risk', 'welcome-task-country-risk'],
+    ['crises', 'welcome-task-verify'],
+    ['chokepoints', 'welcome-task-chokepoint'],
+    ['countries', 'welcome-task-country-risk'],
   ];
-  for (const [route, content, target] of taskLinks) {
+  for (const [route, target] of taskLinks) {
     assert.match(
       rootContent,
-      new RegExp(`href="/${route}/\\?utm_source=welcome&amp;utm_content=${content}"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="${target}"`),
+      new RegExp(`href="/${route}/"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="${target}"`),
     );
   }
-  assert.doesNotMatch(rootContent, /href="\/(?:crises|chokepoints|countries)\/\?[^"#]*(?:ref|wm_referral)=/);
+  assert.doesNotMatch(rootContent, /href="\/(?:crises|chokepoints|countries)\/\?/);
 
   const navContent = rootContent.slice(
     rootContent.indexOf('<nav'),
