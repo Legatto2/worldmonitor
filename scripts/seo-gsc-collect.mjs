@@ -83,6 +83,7 @@ const MAX_PAGES_PER_WINDOW = 40;
 const MAX_URLS_PER_LIST = 5;
 const MAX_FLAGGED_URLS = 50;
 const MAX_TOP_QUERIES = 20;
+const MAX_SITEMAP_DOCUMENTS = 50;
 const SNAPSHOT_SCHEMA_VERSION = 1;
 const PAGE_FAMILY_SCHEMA_VERSION = 2;
 
@@ -367,13 +368,27 @@ export function createLiveTransport({ accessToken, property, fetchImpl = fetch }
   return {
     kind: 'search-console-api',
     rowLimit: SEARCH_ANALYTICS_ROW_LIMIT,
+    // Follows a sitemap index down to its children. The blog sitemap is an
+    // index, so stopping at the top level would silently drop every post from
+    // the inventory and report the blog family as undeclared.
     async sitemaps(urls) {
       const documents = [];
-      for (const url of urls) {
+      const seen = new Set();
+      const queue = [...urls];
+      while (queue.length > 0 && documents.length < MAX_SITEMAP_DOCUMENTS) {
+        const url = queue.shift();
+        if (seen.has(url)) continue;
+        seen.add(url);
         const response = await fetchImpl(url, { headers: { accept: 'application/xml' } });
         invariant(response.ok, `sitemap fetch failed with HTTP ${response.status}`);
-        documents.push({ url, xml: await response.text() });
+        const xml = await response.text();
+        documents.push({ url, xml });
+        if (/<sitemapindex[\s>]/.test(xml)) queue.push(...sitemapUrls(xml));
       }
+      invariant(
+        queue.length === 0,
+        `sitemap expansion exceeded the ${MAX_SITEMAP_DOCUMENTS}-document limit`,
+      );
       return documents;
     },
     // `windowLabel` selects the recording in the fixture transport; live calls

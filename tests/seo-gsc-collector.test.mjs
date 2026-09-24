@@ -9,6 +9,7 @@ import {
   assertNoSecrets,
   collectGscSnapshot,
   createFixtureTransport,
+  createLiveTransport,
   createServiceAccountAssertion,
   decodeServiceAccount,
   describeDisagreement,
@@ -353,6 +354,27 @@ describe('Search Console collector units', () => {
     assert.equal(inventory.sitemaps[0].kind, 'index');
     assert.equal(inventory.sitemaps[0].childCount, 1);
     assert.equal(inventory.sitemaps[1].urlCount, 1);
+  });
+
+  it('follows a sitemap index down to its children when fetching live', async () => {
+    const documents = {
+      'https://www.worldmonitor.app/blog/sitemap-index.xml':
+        '<sitemapindex><sitemap><loc>https://www.worldmonitor.app/blog/sitemap-0.xml</loc></sitemap></sitemapindex>',
+      'https://www.worldmonitor.app/blog/sitemap-0.xml':
+        '<urlset><url><loc>https://www.worldmonitor.app/blog/a-post/</loc></url></urlset>',
+    };
+    const fetchImpl = async (url) => ({
+      ok: documents[url] !== undefined,
+      status: documents[url] === undefined ? 404 : 200,
+      text: async () => documents[url],
+    });
+    const transport = createLiveTransport({ accessToken: 'unused', property: 'unused', fetchImpl });
+    const fetched = await transport.sitemaps(['https://www.worldmonitor.app/blog/sitemap-index.xml']);
+    assert.equal(fetched.length, 2);
+    // Stopping at the index would report the blog family as undeclared while
+    // it was earning impressions.
+    const inventory = buildInventory(fetched);
+    assert.deepEqual(inventory.urls.map((entry) => entry.family), ['blog']);
   });
 
   it('reports no disagreement when there is nothing to disagree about', () => {
