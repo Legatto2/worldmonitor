@@ -24,7 +24,7 @@ for (const mapEnabled of [false, true]) {
         time: new Date(dateMs), fatalities: deaths ? 12 : 0 };
       // Counts include rows beyond the capped panel projection; overlap must not subtract from them.
       const aggregates = {[type]: {count: 80, totalDeaths: deaths * 80}};
-      const hydrated = {events: [row], aggregates, dedupeIndex: [[0, dateMs, 12, 24, deaths]]};
+      const hydrated = {events: [row], aggregates};
       const intelligenceCache = {conflicts: [] as unknown[]};
       let rendered: unknown[] = [];
       let mapped: unknown[] = [];
