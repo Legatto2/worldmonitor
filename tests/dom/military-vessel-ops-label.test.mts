@@ -26,6 +26,10 @@ function militaryOpsVessel(overrides: Partial<MilitaryVessel> = {}): MilitaryVes
   };
 }
 
+function badgeTexts(): (string | undefined)[] {
+  return [...document.querySelectorAll('.popup-badge')].map(el => el.textContent?.trim());
+}
+
 describe('military-ops label surfaces', () => {
   let popup: MapPopup;
   let container: HTMLElement;
@@ -46,8 +50,13 @@ describe('military-ops label surfaces', () => {
 
     const stats = [...document.querySelectorAll('.stat-value')].map(el => el.textContent?.trim());
     expect(stats).toContain('Military Ops');
-    expect(document.querySelector('.popup-badge.elevated')?.textContent).toBe('MILITARY OPS');
-    expect(document.body.textContent ?? '').not.toMatch(/destroyer/i);
+    // Match the badge by its exact text, not by position or the `elevated`
+    // class -- the USNI deployment badge shares both.
+    expect(badgeTexts()).toContain('MILITARY OPS');
+    // Scoped to the type surfaces: an unrelated "destroyer" elsewhere in a
+    // future popup body must not decide whether this assertion passes.
+    expect(stats.join(' ')).not.toMatch(/destroyer/i);
+    expect(badgeTexts()).not.toContain('DESTROYER');
   });
 
   it('keeps the class label for a vessel whose class is actually known', () => {
@@ -59,7 +68,7 @@ describe('military-ops label surfaces', () => {
 
     const stats = [...document.querySelectorAll('.stat-value')].map(el => el.textContent?.trim());
     expect(stats).toContain('Destroyer');
-    expect(document.querySelector('.popup-badge.elevated')?.textContent).toBe('DESTROYER');
+    expect(badgeTexts()).toContain('DESTROYER');
   });
 
   it('shows the AIS activity for cluster members too', () => {

@@ -25,6 +25,13 @@ const stream = vi.hoisted(() => ({
 }));
 const fetchReport = vi.hoisted(() => vi.fn<() => Promise<USNIFleetReport | null>>());
 
+const persisted = vi.hoisted(() => ({ entry: null as unknown }));
+vi.mock('@/services/persistent-cache', () => ({
+  getPersistentCache: async () => persisted.entry,
+  setPersistentCache: async () => {},
+  deletePersistentCache: async () => {},
+}));
+
 vi.mock('@/services/maritime', () => stream);
 vi.mock('@/utils', () => import('@/utils/circuit-breaker'));
 vi.mock('@/services/usni-fleet', async (importOriginal) => ({
@@ -43,6 +50,7 @@ let receive: (data: AisPositionData) => void;
 beforeEach(async () => {
   vi.resetModules();
   localStorage.clear();
+  persisted.entry = null;
   stream.registerAisCallback.mockClear();
   fetchReport.mockReset().mockResolvedValue(null);
   service = await import('@/services/military-vessels');
@@ -87,5 +95,50 @@ describe('AIS military-ops classification', () => {
     expect(service.getVesselByMmsi('235123401')?.vesselType).toBe('patrol');
     expect(service.getVesselByMmsi('235123402')?.vesselType).toBe('special');
     expect(service.getVesselByMmsi('235123403')).toBeUndefined();
+  });
+});
+
+describe('rehydrated pre-fix snapshots', () => {
+  // Snapshots persist for up to 24 h, so shipping the classifier fix alone
+  // would leave a returning user staring at the same wrong Destroyer label
+  // until their cache aged out.
+  it('drops the stale destroyer claim from an AIS-only Military Ops record', async () => {
+    persisted.entry = {
+      data: {
+        vessels: [{
+          id: 'ais-235123456', mmsi: '235123456', name: 'SEA FALCON',
+          vesselType: 'destroyer', aisShipType: 'Military Ops',
+          operator: 'other', operatorCountry: 'Yemen',
+          lat: 12, lon: 44, heading: 0, speed: 4,
+          lastAisUpdate: new Date().toISOString(), confidence: 'low',
+        }],
+        clusters: [],
+      },
+      timestamp: Date.now(),
+    };
+
+    const { vessels } = await service.fetchMilitaryVessels();
+    const revived = vessels.find(v => v.mmsi === '235123456');
+    expect(revived?.vesselType).toBe('unknown');
+    expect(revived?.aisShipType).toBe('Military Ops');
+  });
+
+  it('keeps a real destroyer that carries a hull number', async () => {
+    persisted.entry = {
+      data: {
+        vessels: [{
+          id: 'ais-235123457', mmsi: '235123457', name: 'USS ZUMWALT',
+          vesselType: 'destroyer', hullNumber: 'DDG-1000', aisShipType: 'Military Ops',
+          operator: 'usn', operatorCountry: 'USA',
+          lat: 12, lon: 44, heading: 0, speed: 4,
+          lastAisUpdate: new Date().toISOString(), confidence: 'high',
+        }],
+        clusters: [],
+      },
+      timestamp: Date.now(),
+    };
+
+    const { vessels } = await service.fetchMilitaryVessels();
+    expect(vessels.find(v => v.mmsi === '235123457')?.vesselType).toBe('destroyer');
   });
 });

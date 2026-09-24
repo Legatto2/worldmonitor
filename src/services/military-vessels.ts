@@ -53,6 +53,15 @@ function limitVesselSnapshot(data: VesselSnapshot): VesselSnapshot {
   return { vessels, clusters };
 }
 
+// Snapshots persist for up to 24 h, so a returning user would keep seeing the
+// pre-#8611 'destroyer' claim long after the fix shipped. That claim is
+// identifiable: every destroyer this app can legitimately name comes from
+// KNOWN_NAVAL_VESSELS or the USNI merge, and both always carry a hull number,
+// while the old getVesselTypeFromAis(35) path never set one.
+function isStaleAisMilitaryOpsClaim(v: MilitaryVessel): boolean {
+  return v.vesselType === 'destroyer' && !v.hullNumber && v.aisShipType === 'Military Ops';
+}
+
 // Tracking state
 let isTracking = false;
 let messageCount = 0;
@@ -69,6 +78,7 @@ const breaker = createCircuitBreaker<VesselSnapshot>({
     ...data,
     vessels: data.vessels.map((v: MilitaryVessel) => ({
       ...v,
+      vesselType: isStaleAisMilitaryOpsClaim(v) ? 'unknown' : v.vesselType,
       lastAisUpdate: v.lastAisUpdate instanceof Date ? v.lastAisUpdate : new Date(v.lastAisUpdate as unknown as string),
     })),
   }),

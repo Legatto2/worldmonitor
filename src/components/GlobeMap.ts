@@ -2676,6 +2676,10 @@ export class GlobeMap {
     research:   '#44ffff',
     icebreaker: '#88ccff',
     special:    '#ff44ff',
+    // An AIS-only military contact (#8611) has no hull class. Without this it
+    // fell through to patrol's own blue and read as a coast-guard vessel; the
+    // icon fallback is already the generic ship glyph, which is correct here.
+    unknown:    '#6688aa',
   };
 
   private static readonly VESSEL_TYPE_ICONS: Record<string, string> = {
