@@ -23,6 +23,23 @@ import {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('refresh listing corroboration', () => {
+  it('does not treat a failed rerun after the snapshot as already repaired', () => {
+    const lastRun = readLastRefreshRun({
+      repository: 'o/r',
+      gh: () => ({ total_count: 1, workflow_runs: [{
+        id: 1, run_attempt: 2, status: 'completed', conclusion: 'failure',
+        created_at: '2026-09-14T00:00:00Z', updated_at: '2026-09-24T00:00:00Z',
+      }] }),
+    });
+    const verdict = evaluatePulseFreshness(HAND_REFRESHED, lastRun);
+    assert.equal(verdict.alert, true);
+    assert.equal(verdict.lastRun.superseded, false);
+    const repaired = evaluatePulseFreshness({
+      ...HAND_REFRESHED, capturedAtMs: Date.parse('2026-09-24T01:00:00Z'),
+    }, lastRun);
+    assert.equal(repaired.alert, false);
+    assert.equal(repaired.lastRun.superseded, true);
+  });
   it('still reports a stale snapshot when the workflow listing is unknown', () => {
     const verdict = evaluatePulseFreshness(snapshot(10), { unknown: true });
     const writes = [];

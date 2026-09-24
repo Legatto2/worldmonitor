@@ -110,7 +110,7 @@ function capturedInstant({ capturedAtMs, capturedAt }) {
  * testable without a network.
  *
  * @param {{ filename: string, capturedAt: string, capturedAtMs?: number | null, ageDays: number } | null} snapshot
- * @param {{ conclusion: string | null, url?: string, createdAt?: string } | null} lastRun
+ * @param {{ conclusion: string | null, url?: string, createdAt?: string, completedAt?: string } | null} lastRun
  */
 export function evaluatePulseFreshness(snapshot, lastRun, {
   warnAgeDays = PULSE_SNAPSHOT_WARN_AGE_DAYS,
@@ -149,7 +149,9 @@ export function evaluatePulseFreshness(snapshot, lastRun, {
   // failure reopened the issue a day after the fix (#8417). A run without a
   // timestamp compares as never superseded.
   const failed = Boolean(lastRun?.conclusion) && lastRun.conclusion !== 'success';
-  const superseded = failed && capturedInstant(snapshot) > Date.parse(lastRun.createdAt ?? '');
+  // Reruns retain created_at; only a snapshot after the failed attempt can
+  // repair that failure. Older callers without attempt timing use createdAt.
+  const superseded = failed && capturedInstant(snapshot) > Date.parse(lastRun.completedAt ?? lastRun.createdAt ?? '');
   if (failed && !superseded) {
     reasons.push({
       kind: 'refresh-failed',
@@ -275,7 +277,12 @@ export function readLastRefreshRun({ repository = process.env.GITHUB_REPOSITORY,
   });
   const run = reduceRunListings(listings)[0];
   if (!run) return null;
-  return { conclusion: run.conclusion ?? null, url: run.html_url ?? '', createdAt: run.created_at ?? '' };
+  return {
+    conclusion: run.conclusion ?? null,
+    url: run.html_url ?? '',
+    createdAt: run.created_at ?? '',
+    completedAt: run.updated_at ?? run.created_at ?? '',
+  };
 }
 
 if (isMainModule(import.meta.url, process.argv[1])) {

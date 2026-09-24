@@ -401,12 +401,9 @@ function readRunListingOnce({ gh, repository, workflowFile }) {
   // the newest run cannot depend on an undocumented ordering. The validation
   // above makes any unreadable timestamp a read failure instead of hiding it.
   const ordered = [...runs].sort((left, right) => {
-    const leftMs = parseTimestamp(left?.created_at);
-    const rightMs = parseTimestamp(right?.created_at);
-    if (leftMs === null && rightMs === null) return 0;
-    if (leftMs === null) return 1;
-    if (rightMs === null) return -1;
-    return rightMs - leftMs;
+    if (supersedes(left, right)) return -1;
+    if (supersedes(right, left)) return 1;
+    return 0;
   });
   return {
     runs: ordered,

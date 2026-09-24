@@ -423,6 +423,19 @@ describe('post-merge deploy monitor', () => {
     }
   });
 
+  it('orders tied run creation times within each listing before choosing its newest run', () => {
+    const createdAt = new Date(NOW - HOUR).toISOString();
+    const newest = readNewestRun({
+      gh: () => JSON.stringify({ total_count: 2, workflow_runs: [
+        { id: 900, created_at: createdAt, status: 'completed', conclusion: 'success' },
+        { id: 901, created_at: createdAt, status: 'completed', conclusion: 'failure' },
+      ] }),
+      repository: 'o/r', workflowFile: 'w.yml', now: NOW,
+    });
+    assert.equal(newest.runId, 901);
+    assert.equal(newest.conclusion, 'failure');
+  });
+
   // A sample a sibling PROVES is an older view must not vote. The selection
   // never needed it — an older view's newest run loses the ordering anyway —
   // but the alarm quorum does: without the discard, two stale samples pad a
