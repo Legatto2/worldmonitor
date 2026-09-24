@@ -155,7 +155,9 @@ test('built welcome page prerenders task routes and agent discovery links', { sk
   const agentLinks = [
     /href="\/llms\.txt"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="welcome-agent-briefing"/,
     /href="https:\/\/worldmonitor\.app\/mcp"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="welcome-agent-mcp"/,
-    /href="https:\/\/api\.worldmonitor\.app"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="welcome-agent-api"/,
+    // #8603: the bare api host root is a 308 to the www homepage, so the card
+    // now links the API reference itself. The displayed base URL is unchanged.
+    /href="https:\/\/www\.worldmonitor\.app\/docs\/api-reference"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="welcome-agent-api"/,
     /href="\/\?mode=agent"[^>]*data-umami-event="welcome-cta"[^>]*data-umami-event-target="welcome-agent-view"/,
   ];
   for (const linkPattern of agentLinks) {
