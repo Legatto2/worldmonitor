@@ -1048,7 +1048,7 @@ Its failure mode applies to any live check. An empty detection answer could not 
 
 ### Fallback Stream
 
-A specific broadcast identifier pinned to a Live News channel or webcam slot. Before Live Detection was retired, it played only when detection yielded nothing. Each slot is now an ordered list of sources in `src/config/live-video-sources.ts` (a stream address, a pinned broadcast, or a channel's live embed), tried in order until one is verified live; dead, ended, and unembeddable sources are skipped and never shown as live.
+A specific broadcast identifier pinned to a Live News channel or webcam slot. Before Live Detection was retired, it played only when detection yielded nothing. Each slot is now an ordered list of sources in `src/config/live-video-sources.ts` (a stream address, a pinned broadcast, or a channel's live embed), tried in order until one is verified live; dead, ended, and unembeddable sources are skipped and never shown as live. A slot that lists a channel also tries the video that channel had live when the `seed-live-video-resolved` cron last read its `/live` page, immediately before the channel entry, so a broadcaster that restarts its stream under a new identifier needs no catalog edit.
 
 A Fallback Stream decays with no code change. The provider ends the broadcast, restarts it under a new identifier, deletes it, or reassigns it, and the pinned identifier then points at an error, an ended recording, or another channel's content. Verification keeps an ended or deleted source from playing under a live label, but a dead source is skipped in favour of the next one, so the dashboard shows a problem only once no source in the slot is left. Keeping sources honest takes a recurring liveness check against the provider (`npm run live-video:check -- --all` reports entries that are not live and slots with no entries), not code review. See also: Live Detection.
 
@@ -1061,6 +1061,20 @@ The pause keys on input, not on whether anyone is watching, so input inside an e
 ### Always-On Playback
 
 A viewer preference that starts live news and webcams as soon as their panels are visible instead of waiting for Play. It governs autoplay only; how long video keeps playing without input is the Idle Pause preference, and once an Idle Pause has happened it does not restart video on tab return or scroll-back either. A viewer who saved it before the Idle Pause preference existed is treated as never pausing until they choose a duration, which preserves what the preference used to imply. See also: Idle Pause.
+
+## Conflict Data Sources
+
+### Candidate Release
+
+UCDP's monthly preliminary conflict-event release, published ahead of its annual dataset and merged with a slice of that annual base into one event payload.
+
+A candidate release is not a list of interchangeable events. Besides dated incidents, it carries aggregate rows that cover a whole period and are dated to the period's first day, so any transform that trims rows by recency removes the heaviest rows first. The payload's per-month death totals must equal the release's own; a cap or window that cannot keep the whole candidate release is a data loss, not a size optimization. See also: Reference Period, Seed-Owned Key.
+
+### Reference Period
+
+The calendar month a humanitarian conflict summary describes, as distinct from when the summary was fetched or written.
+
+Two sources can be compared only on a shared reference period, so a seeder that keeps just the newest period makes cross-source comparison impossible whenever the sources publish on different schedules. The newest period can also move backwards: when the preferred bulk source is unavailable and a fallback channel lacks the latest month, the newest period on record falls back a month while the run itself looks fresh. The event categories reported for a period can overlap (one category can be a subset of another), so a per-period total is never the plain sum of its categories unless the source says they are mutually exclusive. See also: Candidate Release, Content-Age Contract, Source Tag.
 
 ## Flagged ambiguities
 
