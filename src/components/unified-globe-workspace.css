@@ -26,3 +26,9 @@
 .local-workspace a[href^="/pro"],.local-workspace a[href="https://www.worldmonitor.app/pro"],.local-workspace .pro-preview-section {display:none!important;}
 
 .local-workspace .pro-preview,.local-workspace .widget-pro-badge,.local-workspace .panel-pro-badge {display:none!important;}
+
+.location-analysis {border:1px solid #426070;border-radius:4px;padding:8px;margin:10px 0;}
+.location-analysis summary {cursor:pointer;color:#a3e635;}
+.location-analysis label {display:block;font-size:12px;margin-top:8px;}
+.location-analysis input {display:block;width:100%;box-sizing:border-box;background:#0e1c29;color:#e0edf5;border:1px solid #426070;padding:5px;}
+.location-analysis-actions {display:grid;gap:5px;margin-top:8px;}

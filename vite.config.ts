@@ -180,6 +180,7 @@ const PANEL_CLUSTER: Record<string, PanelChunkName> = {
 };
 
 const PANEL_SUPPORT_CLUSTER: Record<string, PanelSupportChunkName> = {
+  LocationAnalysis: 'panel-support',
   Status: 'panel-support',
 };
 

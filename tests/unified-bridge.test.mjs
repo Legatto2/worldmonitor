@@ -11,5 +11,5 @@ test('normalization preserves observations and caps untrusted datasets',()=>{
  assert.equal(rows[0].observedAt,'2023-11-14T22:13:20.000Z');assert.equal(validState({type:'wm:state',version:1,points:rows,center:null}),true);
  assert.equal(normalizePoints('news',Array(600).fill({lat:0,lon:0})).length,500);
  assert.deepEqual(normalizePoints('news',[{lat:null,lon:null}]),[]);
- assert.equal(validState({type:'wm:state',version:1,points:Array(3001).fill(rows[0]),center:null}),false);
+ assert.equal(validState({type:'wm:state',version:1,points:Array(3501).fill(rows[0]),center:null}),false);
 });

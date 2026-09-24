@@ -46,3 +46,11 @@ Local mode suppresses account controls, Pro banners, pricing links and upgrade c
 Shodan now offers account/credit status, explicit result pages 1–100, count/facet summaries, host history (bounded to 100 service observations), ASN/ISP/OS/domains/tags, HTTP titles, TLS identity/expiry, indexed CVE IDs, host-detail drill-down and JSON export. Each request remains manual, same-origin and server-side; the existing 30/hour local budget and Shodan plan limits apply. Count summaries use Shodan's documented query-credit-free count endpoint. See https://developer.shodan.io/api.
 
 After loading the public camera catalog, camera markers remain on the globe when the panel closes. Clicking a marker reopens the viewer and starts its operator snapshot refresh. Closing the viewer stops refresh requests. This is a periodically refreshed image, not a continuous video stream. Shodan marker clicks show host details; no indexed service is automatically treated as a playable camera stream.
+
+## Creepy-inspired local location analysis
+
+Open **3D OPERATIONS → Location analysis**. Import a GeoJSON FeatureCollection of Points or CSV with latitude, longitude, title and timestamp columns. The panel supports date ranges, radius filtering around explicit coordinates or the dashboard center, chronological records, map markers, CSV/GeoJSON export, and clearing the in-memory project. Limits: 500 records, 2 MB. Coordinates and dates are validated; unknown dates are excluded when a date range is applied. CSV exports neutralize spreadsheet formulas. Imports do not contact a collector or external service.
+
+This is a new TypeScript/JavaScript implementation inspired by Creepy's map/filter/export workflow. It does not run or vendor Creepy's Python application or revive its social-account collectors. Reviewed source: ilektrojohn/creepy commit 9f60449897e12a7a6f8fb53e602ffc57f2a74f1e (2014-02-02), using PyQt4/QtWebKit. No Creepy code or images were copied.
+
+The-Osint-Toolbox/Geolocation-OSINT is a directory of external resources, not an executable integration. GHunt is a separate Google-oriented Python framework with JSON export and authentication requirements; it has not been installed or connected. Any future connectors require source-specific review and an own-account/authorized-asset scope.

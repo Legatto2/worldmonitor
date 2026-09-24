@@ -1,5 +1,5 @@
 export interface UnifiedCenter { lat:number; lon:number; zoom?:number }
-export type DatasetKind = 'earthquakes'|'news'|'natural'|'military'|'fires'|'outages';
+export type DatasetKind = 'earthquakes'|'news'|'natural'|'military'|'fires'|'outages'|'imported';
 export interface UnifiedPoint extends UnifiedCenter { id:string; kind:DatasetKind; title:string; observedAt:string|null; sourceUrl:string|null }
 export const BRIDGE_VERSION: 1;
 export const DATASET_KINDS: readonly DatasetKind[];

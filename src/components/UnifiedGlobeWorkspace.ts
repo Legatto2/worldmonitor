@@ -1,3 +1,4 @@
+import { LocationAnalysisPanel } from './LocationAnalysisPanel';
 import { BRIDGE_VERSION, DATASET_KINDS, localOrigin, normalizePoints, validCenter, type DatasetKind, type UnifiedPoint, type UnifiedCenter } from '../../shared/unified-bridge.mjs';
 import './unified-globe-workspace.css';
 
@@ -19,6 +20,7 @@ export class UnifiedGlobeWorkspace {
   private center: UnifiedCenter|null = null;
   private tool: 'shodan'|'cameras'|null = null;
   private previousOverflow = '';
+  private readonly locationAnalysis:LocationAnalysisPanel;
 
   static create(getCenter: () => UnifiedCenter|null, onReturn: (center:UnifiedCenter)=>void): UnifiedGlobeWorkspace|null {
     const origin = localOrigin(String(import.meta.env.VITE_UNIFIED_GLOBE_ORIGIN || ''));
@@ -30,9 +32,10 @@ export class UnifiedGlobeWorkspace {
     this.opener.setAttribute('aria-expanded','false');
     this.shell.id='unified-globe-workspace'; this.shell.hidden=true;
     this.shell.setAttribute('role','dialog'); this.shell.setAttribute('aria-modal','true'); this.shell.setAttribute('aria-label','Unified intelligence workspace');
+    this.locationAnalysis=new LocationAnalysisPanel(points=>this.setDataset('imported',points),getCenter);
     const header=document.createElement('header');
     const title=document.createElement('strong'); title.textContent='WORLD MONITOR × GOD’S EYE';
-    header.append(title,this.makeButton('Shodan',()=>this.openTool('shodan')),this.makeButton('Public cameras',()=>this.openTool('cameras')),this.makeButton('Reload globe',()=>this.loadFrame()),this.makeButton('Back to dashboard',()=>this.close()));
+    header.append(title,this.makeButton('Location analysis',()=>this.locationAnalysis.reveal()),this.makeButton('Shodan',()=>this.openTool('shodan')),this.makeButton('Public cameras',()=>this.openTool('cameras')),this.makeButton('Reload globe',()=>this.loadFrame()),this.makeButton('Back to dashboard',()=>this.close()));
     const body=document.createElement('div'); body.className='unified-workspace-body';
     const aside=document.createElement('aside');
     const heading=document.createElement('h2'); heading.textContent='World Monitor context';
@@ -45,7 +48,7 @@ export class UnifiedGlobeWorkspace {
       label.append(input,document.createTextNode(kind)); filters.append(label);
     }
     this.counts.className='unified-counts'; this.list.className='unified-context-list';
-    aside.append(heading,description,this.status,this.counts,filters,this.list);
+    aside.append(heading,description,this.locationAnalysis.element,this.status,this.counts,filters,this.list);
     this.viewport.className='unified-globe-viewport'; body.append(aside,this.viewport); this.shell.append(header,body);
     document.body.append(this.opener,this.shell);
     this.opener.addEventListener('click',()=>this.open());
@@ -98,5 +101,5 @@ export class UnifiedGlobeWorkspace {
     this.frame?.remove();this.frame=null;clearTimeout(this.readyTimer);
     document.body.style.overflow=this.previousOverflow;this.opener.setAttribute('aria-expanded','false');this.opener.focus();
   }
-  public destroy():void {this.close();clearTimeout(this.flushTimer);for(const cleanup of this.cleanups)cleanup();this.opener.remove();this.shell.remove();this.datasets.clear();}
+  public destroy():void {this.locationAnalysis.destroy();this.close();clearTimeout(this.flushTimer);for(const cleanup of this.cleanups)cleanup();this.opener.remove();this.shell.remove();this.datasets.clear();}
 }

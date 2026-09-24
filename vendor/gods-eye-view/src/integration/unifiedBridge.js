@@ -10,7 +10,7 @@ export function initUnifiedBridge({ viewer, restoration }) {
   viewer.dataSources.add(source);
   const points = new Map();
   let disposed = false;
-  const colors = {earthquakes:'#ffb454',news:'#67e8f9',natural:'#7ce5a5',military:'#f07cdb',fires:'#ff6e57',outages:'#cba6ff'};
+  const colors = {earthquakes:'#ffb454',news:'#67e8f9',natural:'#7ce5a5',military:'#f07cdb',fires:'#ff6e57',outages:'#cba6ff',imported:'#a3e635'};
   const bar = document.createElement('div');
   bar.style.cssText='position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:185;background:#0c202eee;color:#dcecf4;padding:8px 12px;border:1px solid #426070;border-radius:5px;display:flex;gap:10px;align-items:center;font:11px system-ui';
   const count=document.createElement('span');count.textContent='World Monitor · waiting for observations';

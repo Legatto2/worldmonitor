@@ -1,5 +1,5 @@
 export const BRIDGE_VERSION = 1;
-export const DATASET_KINDS = Object.freeze(['earthquakes','news','natural','military','fires','outages']);
+export const DATASET_KINDS = Object.freeze(['earthquakes','news','natural','military','fires','outages','imported']);
 const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const finite = (value,limit) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value)<=limit;
 const string = (value,limit=240) => typeof value === 'string' ? value.slice(0,limit) : '';
@@ -32,5 +32,5 @@ export function validPoint(point) {
   return Boolean(point && validCenter(point) && DATASET_KINDS.includes(point.kind) && typeof point.id === 'string' && point.id.length<=160 && typeof point.title==='string' && point.title.length<=240 && (point.observedAt === null || typeof point.observedAt==='string' && point.observedAt.length<=40) && (point.sourceUrl===null || typeof point.sourceUrl==='string' && point.sourceUrl.length<=2048 && safeSourceUrl(point.sourceUrl)));
 }
 export function validState(value) {
-  return Boolean(value && value.version===BRIDGE_VERSION && value.type==='wm:state' && Array.isArray(value.points) && value.points.length<=3000 && value.points.every(validPoint) && (value.center===null || validCenter(value.center)));
+  return Boolean(value && value.version===BRIDGE_VERSION && value.type==='wm:state' && Array.isArray(value.points) && value.points.length<=3500 && value.points.every(validPoint) && (value.center===null || validCenter(value.center)));
 }
