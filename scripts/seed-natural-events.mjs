@@ -33,6 +33,9 @@ const HKO_WARNINGS_KEY = 'weather:hko-warnings:v1';
 const CACHE_TTL = 64800; // 18h — 6x the 3h Railway bundle cadence; preserves last-good through health grace.
 const NHC_RETAIN_MS = 540 * 60_000;
 const SOURCE_RETAIN_MS = 540 * 60_000;
+const EONET_RETAIN_MS = CACHE_TTL * 1000;
+const EONET_BODY_IDLE_MS = 5_000;
+const EONET_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const NHC_FAILURE_CODES = new Set([
   'NHC_POINT_REQUEST_FAILED',
   'NHC_POINT_RESPONSE_INVALID',
@@ -128,14 +131,14 @@ function validGdacsFeatures(features, eventtype) {
   });
 }
 
-function selectSourceSnapshot(result, previous, now, validateRecords) {
+function selectSourceSnapshot(result, previous, now, validateRecords, retainMs = SOURCE_RETAIN_MS) {
   if (result.status === 'fulfilled') {
-    return { version: 1, fetchedAt: now, retainedUntil: now + SOURCE_RETAIN_MS, records: result.value };
+    return { version: 1, fetchedAt: now, retainedUntil: now + retainMs, records: result.value };
   }
   return previous?.version === 1
     && Number.isSafeInteger(previous.fetchedAt) && previous.fetchedAt > 0 && previous.fetchedAt <= now
     && Number.isSafeInteger(previous.retainedUntil) && now < previous.retainedUntil
-    && previous.retainedUntil <= previous.fetchedAt + SOURCE_RETAIN_MS
+    && previous.retainedUntil <= previous.fetchedAt + retainMs
     && validateRecords(previous.records) ? previous : null;
 }
 
@@ -183,6 +186,38 @@ function isDualFamilyConnectFailure(error) {
   }
 }
 
+async function readEonetBody(res, controller, signal) {
+  if (!res.body) return res.json();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  let idleTimer;
+  const cancel = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      idleTimer = setTimeout(() => controller.abort(new DOMException('EONET body stalled', 'TimeoutError')), EONET_BODY_IDLE_MS);
+      const { done, value } = await reader.read();
+      clearTimeout(idleTimer);
+      signal.throwIfAborted();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > EONET_MAX_BODY_BYTES) {
+        const error = new Error('EONET decoded response exceeds 2 MiB');
+        controller.abort(error);
+        throw error;
+      }
+      chunks.push(value);
+    }
+    return await new Response(new Blob(chunks)).json();
+  } finally {
+    clearTimeout(idleTimer);
+    signal.removeEventListener('abort', cancel);
+    reader.releaseLock();
+  }
+}
+
 async function fetchEventSourceJson(source, url, fetchFn) {
   const started = performance.now();
   const deadline = started + SOURCE_REQUEST_BUDGET_MS;
@@ -194,15 +229,21 @@ async function fetchEventSourceJson(source, url, fetchFn) {
     attempt++;
     const attemptStarted = performance.now();
     const dispatcher = ipv4Retry ? new Agent({ connect: { family: 4, timeout: SOURCE_REQUEST_TIMEOUT_MS } }) : undefined;
+    const controller = source === 'eonet' ? new AbortController() : null;
+    const signal = controller
+      ? AbortSignal.any([controller.signal, AbortSignal.timeout(remaining)])
+      : AbortSignal.timeout(Math.min(SOURCE_REQUEST_TIMEOUT_MS, remaining));
+    const headerTimer = controller && setTimeout(() => controller.abort(new DOMException('EONET headers timed out', 'TimeoutError')), Math.min(SOURCE_REQUEST_TIMEOUT_MS, remaining));
     let stage = 'request';
     let headersReceivedAt;
     try {
       const res = await fetchFn(url, {
         headers: { Accept: 'application/json', 'User-Agent': CHROME_UA },
-        signal: AbortSignal.timeout(Math.min(SOURCE_REQUEST_TIMEOUT_MS, remaining)),
+        signal,
         ...(dispatcher ? { dispatcher } : {}),
       });
       headersReceivedAt = performance.now();
+      if (headerTimer) clearTimeout(headerTimer);
       if (!res.ok) {
         stage = 'http';
         const error = httpRetryError(res, { remainingBudgetMs: deadline - performance.now() });
@@ -210,7 +251,7 @@ async function fetchEventSourceJson(source, url, fetchFn) {
         throw error;
       }
       stage = 'body';
-      return await res.json();
+      return await (controller ? readEonetBody(res, controller, signal) : res.json());
     } catch (cause) {
       if (source === 'eonet' && stage === 'request' && attempt === 1 && isDualFamilyConnectFailure(cause)) ipv4Retry = true;
       const code = [cause?.code, cause?.cause?.code].find(value => SOURCE_TRANSPORT_CODES.has(value));
@@ -238,6 +279,7 @@ async function fetchEventSourceJson(source, url, fetchFn) {
       if (deadline - performance.now() <= Math.max(500, error.retryAfterMs || 0)) error.nonRetryable = true;
       throw error;
     } finally {
+      if (headerTimer) clearTimeout(headerTimer);
       await dispatcher?.destroy();
     }
   }), 1, 500);
@@ -886,7 +928,7 @@ export async function fetchNaturalEvents({
     fetchHkoWarningsFn({ now, fetchFn }),
   ]);
 
-  const eonetSnapshot = selectSourceSnapshot(eonetResult, previousSources?.eonet, now, validEonetRecords);
+  const eonetSnapshot = selectSourceSnapshot(eonetResult, previousSources?.eonet, now, validEonetRecords, EONET_RETAIN_MS);
   const eonetEvents = eonetSnapshot?.records || [];
   const sourceSnapshots = {
     ...(gdacsResult.status === 'fulfilled' ? gdacsResult.value.snapshots
@@ -971,11 +1013,13 @@ export async function fetchNaturalEvents({
   }
 
   // Add EONET events
+  const eonetIndexes = [];
   for (const event of eonetEvents) {
     const k = `${event.lat.toFixed(1)}-${event.lon.toFixed(1)}-${event.category}`;
     if (!seenLocations.has(k)) {
       seenLocations.add(k);
       merged.push(event);
+      eonetIndexes.push(merged.length - 1);
     }
   }
 
@@ -1003,6 +1047,7 @@ export async function fetchNaturalEvents({
   }
   return {
     events: merged,
+    ...(eonetSnapshot ? { eonetRetention: { retainedUntil: eonetSnapshot.retainedUntil, eventIndexes: eonetIndexes } } : {}),
     fetchedAt: Math.min(now, nhcSnapshot.fetchedAt ?? now, ...Object.values(sourceSnapshots).filter(Boolean).map(snapshot => snapshot.fetchedAt)),
     westernPacific,
     hkoWarnings: {
