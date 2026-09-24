@@ -2123,8 +2123,8 @@ describe('crawlable corpus generator', () => {
     try {
       await buildCorpus({ rootDir: repoRoot, outDir, baseUrl: 'https://www.worldmonitor.app' });
       const visibleText = (html) => html
-        .replace(/<script\b[\s\S]*?<\/script\s*>/gi, ' ')
-        .replace(/<style\b[\s\S]*?<\/style\s*>/gi, ' ')
+        .replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, ' ')
+        .replace(/<style\b[^>]*>[\s\S]*?<\/style\b[^>]*>/gi, ' ')
         .replace(/<[^>]+>/g, ' ');
       for (const [page, expected] of [
         ['chokepoints/index.html', /Sources: World Monitor weekly pulse snapshot and World Monitor chokepoint registry/],
