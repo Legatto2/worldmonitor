@@ -4664,7 +4664,7 @@ ${crises.map((crisis) => `        <a class="card" href="/crises/${escapeHtml(cri
       <h2>How these trackers are scoped</h2>
       <p>Every tracker names its covered countries up front and never silently widens. Metrics are monthly country-level conflict summaries — recorded events, political-violence events, fatalities, and demonstrations — from the UN OCHA <a href="https://data.humdata.org/hapi">Humanitarian API (HDX HAPI)</a>. A combined total is shown only when every covered country reports the same reference month; otherwise per-country figures stand alone.</p>
       <h2>What they are not</h2>
-      <p>These are bounded pulses, not battlefield maps, casualty ledgers, or forecasts. Missing countries are reported as unavailable rather than zero, and event-level context lives in the <a href="/">live dashboard</a> with its map layers and independent signals.</p>
+      <p>These are bounded pulses, not battlefield maps, casualty ledgers, or forecasts. Missing countries are reported as unavailable rather than zero, and event-level context lives in the <a href="/dashboard">live dashboard</a> with its map layers and independent signals.</p>
       <p class="source">Scope source: <a href="${CRISIS_REGISTRY_URL}" data-snapshot-source="${CRISIS_REGISTRY_PATH}">World Monitor crisis registry</a>. Live metrics: HAPI/HDX humanitarian conflict summaries through the World Monitor API.</p>`;
   return pageDocument({
     baseUrl,
@@ -4923,7 +4923,7 @@ function renderToolsIndex({ baseUrl, lastmod, crisisCount, chokepointCount }) {
       <h2>How these tools work</h2>
       <p>Each tool asks one narrow operational question — what natural hazards are open right now, is a country's monitored airspace disrupted, where independent streams converge — and answers it from a maintained World Monitor contract. Results are labelled with their source and retrieval time, unavailable data is reported as unavailable rather than zero, and independent signals are never combined into a single opaque threat score unless the tool names that combination explicitly.</p>
       <h2>When to use them</h2>
-      <p>Use these pages for a fast, shareable check before a trip, a shipment, or a market open; use the <a href="/">live dashboard</a> when you need the full picture — map layers, alerts, news, and country briefs side by side. Hazard coverage is documented in <a href="/docs/natural-disasters">natural disaster tracking</a>; chokepoint scoring in the <a href="/docs/methodology/chokepoints">chokepoint methodology</a>; convergence scoring in <a href="/docs/geographic-convergence">geographic convergence</a>.</p>
+      <p>Use these pages for a fast, shareable check before a trip, a shipment, or a market open; use the <a href="/dashboard">live dashboard</a> when you need the full picture — map layers, alerts, news, and country briefs side by side. Hazard coverage is documented in <a href="/docs/natural-disasters">natural disaster tracking</a>; chokepoint scoring in the <a href="/docs/methodology/chokepoints">chokepoint methodology</a>; convergence scoring in <a href="/docs/geographic-convergence">geographic convergence</a>.</p>
       <p class="source">Live results load from maintained World Monitor API contracts. Static route descriptions remain available if a current source cannot be reached.</p>`;
   return pageDocument({
     baseUrl,
@@ -5009,7 +5009,7 @@ ${thresholds}
 ${examples}
       </div>
       <h2>Where to go next</h2>
-      <p>Open the <a href="/">live dashboard</a> for map layers, or read the full methodology in <a href="/docs/geographic-convergence">geographic convergence</a>. Country pages expose related instability scores; this page is the citable correlation definition.</p>
+      <p>Open the <a href="/dashboard">live dashboard</a> for map layers, or read the full methodology in <a href="/docs/geographic-convergence">geographic convergence</a>. Country pages expose related instability scores; this page is the citable correlation definition.</p>
       <p class="source" data-snapshot-source="${escapeHtml(snapshotPath)}">Download: <a href="${escapeHtml(downloadHref)}">${CONVERGENCE_DATASET_DOWNLOAD}</a>. Snapshot: World Monitor weekly pulse snapshot. Methodology reference, last reviewed ${escapeHtml(prettyDate(lastmod))}. Methodology: <a href="/docs/geographic-convergence">Geographic Convergence Detection</a>.</p>`;
   return pageDocument({
     baseUrl,
@@ -5107,7 +5107,7 @@ ${countrySelectOptions(countryBounds, { includeWorldwide: true })}
         <div class="tool-meta"><time data-live-updated>Requesting the latest available snapshot…</time></div>
         <noscript><p>Enable JavaScript to load and filter the current event snapshot. This page still documents the tool’s coverage and sources.</p></noscript>
       </section>
-      <a class="cta" data-dashboard-link href="${escapeHtml(absoluteUrl(baseUrl, '/'))}">Open the selected area in World Monitor →</a>
+      <a class="cta" data-dashboard-link href="${escapeHtml(absoluteUrl(baseUrl, '/dashboard'))}">Open the selected area in World Monitor →</a>
       <h2>Sources and limits</h2>
       <p>World Monitor reads its seeded natural-event snapshot from maintained <a href="https://eonet.gsfc.nasa.gov/">NASA EONET</a>, <a href="https://www.gdacs.org/">GDACS</a>, <a href="https://www.nhc.noaa.gov/">NHC</a>, and <a href="https://www.hko.gov.hk/">HKO</a> ingestion paths. Source names are retained on individual events. A zero is shown only when a source snapshot is explicitly available; unavailable snapshots fail closed. Coverage and update cadence are documented in <a href="/docs/natural-disasters">natural disaster tracking</a>.</p>
       <p class="source">Geographic filters: ${COUNTRY_BBOXES_PATH}. Live metrics: <code>/api/natural/v1/list-natural-events</code>.</p>`;

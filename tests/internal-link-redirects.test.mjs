@@ -412,8 +412,12 @@ describe('internal links never redirect or 404 (#8603)', () => {
       for (const entry of readdirSync(join(repoRoot, 'docs', relative), { withFileTypes: true })) {
         const child = relative === '.' ? entry.name : `${relative}/${entry.name}`;
         if (entry.isDirectory()) visit(child);
-        else if (entry.name.endsWith('.mdx') && published.has(`/docs/${child.slice(0, -'.mdx'.length)}`)) {
-          docs.push(`docs/${child}`);
+        else {
+          // docsRoutes() counts .md as published because Mintlify renders it;
+          // scanning only .mdx left three .md-only methodology pages published
+          // but never link-checked.
+          const ext = entry.name.endsWith('.mdx') ? '.mdx' : entry.name.endsWith('.md') ? '.md' : null;
+          if (ext && published.has(`/docs/${child.slice(0, -ext.length)}`)) docs.push(`docs/${child}`);
         }
       }
     };
