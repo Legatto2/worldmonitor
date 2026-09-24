@@ -175,11 +175,12 @@ export const RUN_LISTING_SAMPLES = 3;
 export const RUN_LISTING_ALARM_QUORUM = 2;
 
 // Wall-clock one workflow's sampling may spend before it settles for the
-// samples already in hand. A slow but ANSWERING 5xx is retryable, so three
-// samples x three attempts x ~20s across three workflows would reach ~12
-// minutes against the job's `timeout-minutes: 10` — and a killed job is a red
-// monitor, the exact false alarm sampling exists to remove. Checked between
-// samples, so it never truncates a read in flight.
+// samples already in hand. A slow but ANSWERING 5xx is the retryable path, so
+// the samples that cost the most are the ones returning nothing. This caps how
+// many of them one workflow pays for; it does NOT cap a read already in
+// flight, which is what MONITOR_WALL_BUDGET_MS below exists for. The single
+// source of the arithmetic is there — do not restate it here, so the two
+// cannot drift apart.
 export const RUN_LISTING_SAMPLE_BUDGET_MS = 90_000;
 
 // Retries AFTER the first attempt, so the worst case is 3 calls. Sized against
@@ -189,11 +190,21 @@ export const RUN_LISTING_SAMPLE_BUDGET_MS = 90_000;
 // baseline read adds nothing here: it is a local `git rev-parse` of the tag
 // the deploy workflow writes, not a GitHub call.
 // The whole walk's wall-clock ceiling, against the workflow's
-// `timeout-minutes: 10`. Per-read budgets cannot bound this on their own: one
-// retryable 5xx costs 3 attempts x GH_CALL_TIMEOUT_MS plus backoff (~91.5s),
-// RUN_LISTING_SAMPLE_BUDGET_MS is only checked BETWEEN samples so a read
-// already in flight overshoots it, and readRunJobs is a further unbudgeted
-// read. Three workflows of that reach ~819s and the runner kills the job —
+// `timeout-minutes: 10` (600s). Per-read budgets cannot bound this on their
+// own, and the arithmetic is worth writing down once because every factor is a
+// constant in this file:
+//
+//   one attempt          <= GH_CALL_TIMEOUT_MS                        30.0s
+//   one read             1 + GH_READ_RETRY_ATTEMPTS attempts + backoff
+//                        3 x 30s + (500ms + 1000ms)                   91.5s
+//   one workflow         2 listing samples (the 2nd starts under
+//                        RUN_LISTING_SAMPLE_BUDGET_MS and overshoots
+//                        it, since the budget is checked BETWEEN
+//                        samples) + 1 unbudgeted readRunJobs
+//                        3 x 91.5s                                   274.5s
+//   three workflows      3 x 274.5s                                  823.5s
+//
+// 823.5s against a 600s timeout: the runner kills the job —
 // which reports as a RED monitor with no verdict for any workflow, the exact
 // false alarm this file exists to remove. The deadline is checked before every
 // gh ATTEMPT (it wraps the callee of createRetryingGh, not its caller), so the
