@@ -921,7 +921,7 @@ describe('Live News resolved channel live videos (#8545)', () => {
     await flush();
     headerButton('Toggle playback').click();
     await flush();
-    expect(cnnPlayers().at(-1)).toBe(B);
+    expect(cnnPlayers()).toEqual(['live_stream', B]);
     expect(resolvedFeed.ensureHydrated).toHaveBeenCalledTimes(1);
   });
 
