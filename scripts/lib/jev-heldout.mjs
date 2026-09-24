@@ -6,8 +6,8 @@
 // (transcript line 2085, 13:55Z), rule from line 3352. The held-out titles were judged
 // after that. No value in this block changes once a Jev answer on the held-out set
 // exists; tests/jev-heldout-freeze.test.mjs pins every one.
-import { buildJevRequest } from '../../shared/jev-classify.js';
-import { isAlertLevel, promptSha } from './classify-eval.mjs';
+import { buildJevRequest, hasNonLatinLetters } from '../../shared/jev-classify.js';
+import { isAlertLevel, promptSha, scoreAlertLabels } from './classify-eval.mjs';
 
 const noul = (instructions, t, f) => ({ type: 'noul', instructions, criteria: { true: t, false: f } });
 
@@ -85,3 +85,25 @@ export function verdict(scores) {
 }
 
 const pct = (p) => `${(100 * p).toFixed(1)}%`;
+
+// Production keeps non-Latin titles off Jev, so every arm is scored without them.
+export const latinRows = (rows) => rows.filter((r) => !hasNonLatinLetters(r.title));
+
+// Mapped onto levels so scoreAlertLabels reads them unchanged; only its alert fields
+// mean anything for a Jev arm. An unanswered title is unlabelled, so a real alert
+// there is missed, as in production.
+export const armLabels = (arm, answersByTitle) => Object.fromEntries(
+  Object.entries(answersByTitle).map(([title, a]) => [title, a ? (arm.alert(a) ? 'high' : 'info') : null]),
+);
+
+// jevRuns: { [run]: { [title]: JevAnswer | null } }; relayRuns: { [run]: { [title]: level | null } }.
+export function scoreArms(rows, jevRuns, relayRuns) {
+  const full = latinRows(rows);
+  const clearCut = full.filter((r) => !r.borderline);
+  const bySlice = (labels) => ({ full: scoreAlertLabels(full, labels), clearCut: scoreAlertLabels(clearCut, labels) });
+  const perRun = (runs, toLabels) => Object.fromEntries(Object.entries(runs).map(([run, x]) => [run, bySlice(toLabels(x))]));
+  return {
+    [RELAY_ARM]: perRun(relayRuns, (labels) => labels),
+    ...Object.fromEntries(ARMS.map((arm) => [arm.name, perRun(jevRuns, (answers) => armLabels(arm, answers))])),
+  };
+}
