@@ -4851,12 +4851,18 @@ body.live-news-fullscreen-active .panels-grid > *:not(.live-news-fullscreen) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  column-gap: 4px;
+  row-gap: 1px;
+}
+
+.publisher-roster li + li {
+  margin-top: 5px;
 }
 
 .publisher-roster .publisher-feeds {
   flex-basis: 100%;
   font-size: calc(8px * var(--wm-panel-effective-scale, 1));
+  opacity: 0.75;
   overflow-wrap: anywhere;
 }
 
