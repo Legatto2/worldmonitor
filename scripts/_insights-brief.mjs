@@ -6,6 +6,7 @@ import { countPublisherFamilies } from './shared/publisher-families.js';
 import {
   validateNoHallucinatedProperNouns,
   validateNoHallucinatedFacts,
+  validateNoHallucinatedStatusQualifiers,
   checkLeadGrounding,
   verifyCitationIndexes,
 } from './shared/brief-llm-core.js';
@@ -30,6 +31,8 @@ import {
 // Requiring the run to close the sentence keeps the merge citation-neutral: the
 // fragment can only ever join the citation it already owned.
 const MIDSENTENCE_DOTTED_ACRONYM = /\b[A-Z]\.(?:[A-Z]\.?)+(?=\s+(?:\p{Ll}|(?:\[\d{1,3}\])+(?:[.!?]|$)))/gu;
+// A lead unit the split ended at a dotted acronym it could not prove mid-clause.
+const ENDS_WITH_DOTTED_ACRONYM = /\b[A-Z]\.(?:[A-Z]\.)+\s*$/u;
 
 /**
  * #5947: why a synthesized brief was rejected, as a bounded closed vocabulary.
@@ -53,6 +56,7 @@ export const BRIEF_REJECTIONS = Object.freeze({
   LEAD_UNCITED: 'lead-uncited',
   LEAD_PROPER_NOUN: 'lead-proper-noun',
   LEAD_NUMERIC_FACT: 'lead-numeric-fact',
+  LEAD_STATUS_QUALIFIER: 'lead-status-qualifier',
   LEAD_GROUNDING: 'lead-grounding',
 });
 
@@ -102,6 +106,11 @@ export function synthesisRejectionFeedback(rejection) {
         return `Correction: your previous draft was rejected because "${detail}" does not appear in any story its sentence cited. Remove it, or move that claim into a sentence that cites the story stating it.`;
       }
       return 'Correction: your previous draft was rejected because a lead claim was not supported by the stories its sentence cited. Every name, place and number must appear in a cited story.';
+    case BRIEF_REJECTIONS.LEAD_STATUS_QUALIFIER:
+      if (detail) {
+        return `Correction: your previous draft was rejected because "${detail}" calls a person former, acting, interim or late, and no story its sentence cited says so. Use the person's title exactly as the cited story gives it.`;
+      }
+      return 'Correction: your previous draft was rejected because it called a person former, acting, interim or late without a cited story saying so. Use titles exactly as the cited story gives them.';
     case BRIEF_REJECTIONS.LEAD_UNCITED:
       return 'Correction: your previous draft was rejected because a lead sentence carried no citation. End every lead sentence with the bracket number(s) of the stories it draws from.';
     case BRIEF_REJECTIONS.PARSE:
@@ -535,7 +544,13 @@ export function composeSynthesizedBriefResult(rawText, topStories, opts = {}) {
     droppedLeadSentences += 1;
     if (!firstDrop) firstDrop = { rejection, detail };
   };
+  // The unit before this one, when the split ended it at a dotted acronym:
+  // "…as former U.S." | "President Trump welcomed…" carries one qualifier
+  // across the boundary, so the qualifier check reads the pair.
+  let acronymHead = null;
   for (const sentence of leadSentences) {
+    const head = acronymHead;
+    acronymHead = null;
     const cited = [...sentence.matchAll(/\[(\d{1,3})\]/g)]
       .map((match) => Number.parseInt(match[1], 10))
       .filter((n) => n >= 1 && n <= topStories.length);
@@ -559,6 +574,26 @@ export function composeSynthesizedBriefResult(rawText, topStories, opts = {}) {
     // observes exactly what it observed before the reasons were split out.
     const sentenceValidation = validateNoHallucinatedProperNouns(attributed, scopedGround);
     const factValidation = validateNoHallucinatedFacts(attributed, scopedGround);
+    // #8441: the proper-noun gate reads "Former President" as a title prefix
+    // and grounds only "Trump", so the qualifier needs its own check. One
+    // ground per cited story: the qualifier and the name must share a story.
+    const qualifierGround = (ns) => ns.map((n) => storyGroundText(topStories[n - 1], groundOpts));
+    const ownQualifier = validateNoHallucinatedStatusQualifiers(attributed, qualifierGround(cited));
+    // Only a match the unit alone does not report crosses into the head;
+    // compare phrases, not counts, since the pair grounds on more stories.
+    const spanOnly = head
+      ? (validateNoHallucinatedStatusQualifiers(
+        `${head.attributed} ${attributed}`,
+        qualifierGround([...new Set([...head.cited, ...cited])]),
+      ).hallucinated ?? []).filter((phrase) => !(ownQualifier.hallucinated ?? []).includes(phrase))
+      : [];
+    const qualifierValidation = spanOnly.length > 0 ? { ok: false, hallucinated: spanOnly } : ownQualifier;
+    if (validatorMode === 'enforce' && spanOnly.length > 0) {
+      // The qualifier sits in the head, which already passed on its own.
+      survivingSentences.pop();
+      if (head.attributions > 0) sourceAttributions--;
+      dropSentence(BRIEF_REJECTIONS.LEAD_STATUS_QUALIFIER, qualifierValidation.hallucinated);
+    }
     if (validatorMode === 'enforce') {
       if (!sentenceValidation.ok) {
         dropSentence(BRIEF_REJECTIONS.LEAD_PROPER_NOUN, sentenceValidation.hallucinated);
@@ -568,11 +603,18 @@ export function composeSynthesizedBriefResult(rawText, topStories, opts = {}) {
         dropSentence(BRIEF_REJECTIONS.LEAD_NUMERIC_FACT, factValidation.hallucinated);
         continue;
       }
+      if (!qualifierValidation.ok) {
+        dropSentence(BRIEF_REJECTIONS.LEAD_STATUS_QUALIFIER, qualifierValidation.hallucinated);
+        continue;
+      }
     }
     // Attribution is an accept-side counter; a dropped sentence's outlet naming
     // never reached a reader, so only survivors count.
     if (attribution.matches > 0) sourceAttributions++;
     survivingSentences.push(sentence);
+    if (ENDS_WITH_DOTTED_ACRONYM.test(sentence)) {
+      acronymHead = { attributed, cited, attributions: attribution.matches };
+    }
   }
   if (survivingSentences.length === 0) {
     // Total failure classifies exactly as before: the first failing sentence's
@@ -625,11 +667,10 @@ export function composeSynthesizedBriefResult(rawText, topStories, opts = {}) {
     // Same attribution rule as the lead, scoped to THIS story's outlet: the line
     // may name it, and naming it grounds nothing else. The published text stays
     // `bare` — only the gate's view is masked.
-    const validation = validateNoHallucinatedProperNouns(
-      maskAttributedSources(bare, [story.primarySource]),
-      storyGroundText(story, groundOpts),
-    );
-    if (!validation.ok) {
+    const gateView = maskAttributedSources(bare, [story.primarySource]);
+    const ground = storyGroundText(story, groundOpts);
+    const validation = validateNoHallucinatedProperNouns(gateView, ground);
+    if (!validation.ok || !validateNoHallucinatedStatusQualifiers(gateView, ground).ok) {
       hallucinatedLines++;
       if (validatorMode === 'enforce') return { n, text: `${headline} [${n}]` };
     }

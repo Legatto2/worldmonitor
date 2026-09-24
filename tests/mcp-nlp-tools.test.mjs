@@ -1145,6 +1145,58 @@ describe('#5697 NLP MCP tools', () => {
         globalThis.fetch = originalFetchImpl;
       }
     });
+
+    it('reports corroboration per cluster and picks the primary by real source tier (#6419)', async () => {
+      const originalFetchImpl = globalThis.fetch;
+      const serve = (items) => {
+        globalThis.fetch = async (input, init = {}) => {
+          const url = String(input);
+          if (url.includes('/api/news/v1/list-feed-digest')) {
+            requests.push({ url, init });
+            return Response.json({
+              generatedAt: '2026-09-20T12:00:00.000Z',
+              categories: {
+                politics: {
+                  items: items.map(([source, corroborationCount], i) => ({
+                    source,
+                    title: `Sanctions package advances through committee ${'vote '.repeat(i)}`.trim(),
+                    link: `https://s/${i}`,
+                    // The tier-4 outlet is the newest, so a recency-only primary would pick it.
+                    publishedAt: 1785405600000 - i * 1000,
+                    isAlert: false,
+                    ...(corroborationCount ? { corroborationCount } : {}),
+                  })),
+                },
+              },
+            });
+          }
+          return originalFetchImpl(input, init);
+        };
+      };
+      const corroborationOf = async (items) => {
+        serve(items);
+        const { result } = await callTool('get_news_clusters', {});
+        assert.equal(result.totalClusters, 1, 'fixture must cluster into one story');
+        return result.clusters[0];
+      };
+
+      try {
+        assert.deepEqual((await corroborationOf([['Reuters World'], ['Reuters US']])).corroboration,
+          { state: 'single-publisher', publishers: 1 });
+        assert.deepEqual((await corroborationOf([['The Verge'], ['Hacker News']])).corroboration,
+          { state: 'tier4-only', publishers: 2 });
+        const aboveSeen = await corroborationOf([['The Verge', 3], ['Hacker News', 3]]);
+        assert.deepEqual(aboveSeen.corroboration, { state: 'corroborated', publishers: 3 },
+          'a digest count above the seen families means unseen publishers of unknown tier');
+        assert.equal(aboveSeen.distinctSourceCount, 2, 'distinctSourceCount stays the member-family count min_sources filters on');
+
+        const mixed = await corroborationOf([['The Verge'], ['Reuters World']]);
+        assert.deepEqual(mixed.corroboration, { state: 'corroborated', publishers: 2 });
+        assert.equal(mixed.primarySource, 'Reuters World', 'tier 1 outranks a newer tier-4 member');
+      } finally {
+        globalThis.fetch = originalFetchImpl;
+      }
+    });
   });
 
   describe('get_keyword_spikes', () => {
