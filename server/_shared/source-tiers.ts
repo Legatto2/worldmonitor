@@ -38,8 +38,8 @@ export const TIER_MEANING: Readonly<Record<DeclaredTier, string>> = Object.freez
   4: 'Aggregators and blogs',
 });
 
-/** The public tier table. The docs site keeps "&" in heading anchors. */
-export const TIER_DOCS_HREF = '/docs/data-sources#source-credibility-%26-feed-tiering';
+/** The public tier table's path on the web origin. The docs site keeps "&" in heading anchors. */
+export const TIER_DOCS_PATH = '/docs/data-sources#source-credibility-%26-feed-tiering';
 
 /**
  * The tier a label was explicitly assigned in the RSS, Telegram or X tables,

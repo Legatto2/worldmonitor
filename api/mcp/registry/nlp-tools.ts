@@ -779,6 +779,7 @@ export const NLP_TOOLS: ToolDef[] = [
         const projectedSources = sources.slice(0, 8);
         const digestCredibilityScore = cluster.credibilityScore;
         const evidence = evidenceFromCluster(cluster);
+        const verdict = assessCorroboration(evidence);
         const provenanceBySource = new Map(
           [...new Set([cluster.primarySource, ...projectedSources])]
             .map(source => [source, getSourceProvenanceState(source)] as const),
@@ -814,8 +815,8 @@ export const NLP_TOOLS: ToolDef[] = [
               propagandaRisk: provenanceBySource.get(cluster.primarySource)!.risk,
               independentCorroborationCount: distinctPublishers,
             }),
-          corroboration: toCorroborationJson(assessCorroboration(evidence)),
-          ...toPublisherRosterJson(publisherRoster(evidence)),
+          corroboration: toCorroborationJson(verdict),
+          ...toPublisherRosterJson(publisherRoster(evidence), verdict),
         };
       });
       return {

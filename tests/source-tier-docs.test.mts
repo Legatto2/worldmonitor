@@ -11,7 +11,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { SOURCE_TIERS, TIER_DOCS_HREF, TIER_MEANING, type DeclaredTier } from '../server/_shared/source-tiers.ts';
+import { SOURCE_TIERS, TIER_MEANING, type DeclaredTier } from '../server/_shared/source-tiers.ts';
+import { TIER_DOCS_HREF } from '../src/utils/tier-docs.ts';
+import { WEB_APP_ORIGIN } from '../src/config/web-origin.ts';
 import { publisherFamilyFor } from '../shared/publisher-families.js';
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -76,10 +78,11 @@ describe('published tier tables match the source tables', () => {
 });
 
 describe('tier meaning reaches readers intact', () => {
-  it('TIER_DOCS_HREF points at the tier table heading as the docs site slugs it', () => {
-    const [path, fragment] = TIER_DOCS_HREF.split('#');
-    assert.equal(path, '/docs/data-sources');
-    assert.equal(decodeURIComponent(fragment!), EN_HEADING.replace(/^#+ /, '').toLowerCase().replace(/ /g, '-'));
+  it('TIER_DOCS_HREF is absolute on the web origin and points at the tier table heading as the docs site slugs it', () => {
+    const url = new URL(TIER_DOCS_HREF);
+    assert.equal(url.origin, WEB_APP_ORIGIN);
+    assert.equal(url.pathname, '/docs/data-sources');
+    assert.equal(decodeURIComponent(url.hash.slice(1)), EN_HEADING.replace(/^#+ /, '').toLowerCase().replace(/ /g, '-'));
   });
 
   it('the English chip titles are TIER_MEANING', () => {

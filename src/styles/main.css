@@ -4849,8 +4849,15 @@ body.live-news-fullscreen-active .panels-grid > *:not(.live-news-fullscreen) {
 
 .publisher-roster li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+}
+
+.publisher-roster .publisher-feeds {
+  flex-basis: 100%;
+  font-size: calc(8px * var(--wm-panel-effective-scale, 1));
+  overflow-wrap: anywhere;
 }
 
 .tier-chip {

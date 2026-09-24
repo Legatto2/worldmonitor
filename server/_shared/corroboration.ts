@@ -165,6 +165,13 @@ export const CORROBORATION_OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = Ob
 export const PUBLISHER_ROSTER_CAP = 8;
 
 /**
+ * Wire rosters list at most this many feed labels per publisher. Labels that
+ * differ only in case fold into one family, so the label count is otherwise
+ * unbounded by the family count.
+ */
+export const PUBLISHER_ROSTER_LABEL_CAP = 4;
+
+/**
  * Wire roster strings are capped so a full roster on every cluster fits the MCP
  * output budget. The longest configured label or publisher name fits whole; a
  * test holds the tables to it.
@@ -184,14 +191,28 @@ function capUtf8(value: string, maxBytes: number): string {
   return value.slice(0, end);
 }
 
-export type PublisherJson = { name: string; tier: DeclaredTier | null; labels: string[] };
+export type PublisherJson = { name: string; tier: DeclaredTier | null; labels: string[]; labelsUnlisted: number };
 export type PublisherRosterJson = { publishers: PublisherJson[]; publishersUnlisted: number };
 
-export function toPublisherRosterJson(roster: PublisherRoster): PublisherRosterJson {
+/**
+ * publishersUnlisted counts every publisher the verdict knows of that the list
+ * omits: those past the cap, and those the digest counted but this caller
+ * cannot name. publishers.length + publishersUnlisted equals the verdict's
+ * publisher count whenever the verdict is known.
+ */
+export function toPublisherRosterJson(roster: PublisherRoster, verdict: Corroboration): PublisherRosterJson {
   const cap = (value: string) => capUtf8(value, PUBLISHER_ROSTER_STRING_MAX_BYTES);
+  const publishers = roster.slice(0, PUBLISHER_ROSTER_CAP)
+    .map(({ name, tier, labels }) => ({
+      name: cap(name),
+      tier,
+      labels: labels.slice(0, PUBLISHER_ROSTER_LABEL_CAP).map(cap),
+      labelsUnlisted: Math.max(0, labels.length - PUBLISHER_ROSTER_LABEL_CAP),
+    }));
+  const knownTotal = verdict.state === 'unknown' ? 0 : verdict.publishers;
   return {
-    publishers: roster.slice(0, PUBLISHER_ROSTER_CAP).map(({ name, tier, labels }) => ({ name: cap(name), tier, labels: labels.map(cap) })),
-    publishersUnlisted: Math.max(0, roster.length - PUBLISHER_ROSTER_CAP),
+    publishers,
+    publishersUnlisted: Math.max(0, Math.max(roster.length, knownTotal) - publishers.length),
   };
 }
 
@@ -210,17 +231,18 @@ export const PUBLISHER_ROSTER_OUTPUT_PROPERTIES: Readonly<Record<string, unknown
     description: `Distinct publisher families behind this claim, from the same source labels as corroboration: best declared tier first, undeclared last, then name. Up to ${PUBLISHER_ROSTER_CAP}.`,
     items: {
       type: 'object',
-      required: ['name', 'tier', 'labels'],
+      required: ['name', 'tier', 'labels', 'labelsUnlisted'],
       properties: {
         name: { type: 'string', description: `Publisher name, or the feed label when no publisher family is curated. At most ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes.` },
         tier: { ...DECLARED_TIER_SCHEMA, description: `Best tier declared among this claim's labels for the publisher: ${TIER_LEGEND}. null means none is declared, never tier 4. Tiers rank sources; they do not judge the claim.` },
-        labels: { type: 'array', items: { type: 'string' }, description: `Feed labels seen for this publisher, which the tier was read from. Each at most ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes; the sources list carries the full label.` },
+        labels: { type: 'array', items: { type: 'string' }, description: `Feed labels seen for this publisher, first seen first, up to ${PUBLISHER_ROSTER_LABEL_CAP}. The tier is read from every seen label, listed or not. Each at most ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes; the sources list carries the full label.` },
+        labelsUnlisted: { type: 'integer', minimum: 0, description: 'Feed labels seen for this publisher beyond those labels lists.' },
       },
     },
   },
   publishersUnlisted: {
     type: 'integer',
     minimum: 0,
-    description: `Publishers beyond the first ${PUBLISHER_ROSTER_CAP} that publishers omits.`,
+    description: `Publishers counted in corroboration.publishers that publishers does not name: those past the first ${PUBLISHER_ROSTER_CAP}, and those the digest counted whose feed labels this response does not carry. publishers.length + publishersUnlisted equals corroboration.publishers when corroboration.state is not unknown.`,
   },
 });

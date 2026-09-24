@@ -5,7 +5,7 @@ import { THREAT_PRIORITY } from '@/services/threat-classifier';
 import { formatTime, getCSSColor } from '@/utils';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
 import { computeNewSinceVisit } from '@/utils/new-since-visit';
-import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromItem, publisherRoster } from '@/utils/corroboration-flag';
+import { assessCorroboration, badgePublisherCount, corroborationFlagHtml, evidenceFromCluster, evidenceFromItem, publisherRoster } from '@/utils/corroboration-flag';
 import { analysisWorker, enrichWithVelocityML, getClusterAssetContext, MAX_DISTANCE_KM, activityTracker, generateSummary, translateText, preloadRelatedAssetTables } from '@/services';
 import { SITE_VARIANT } from '@/config';
 import { t, getCurrentLanguage, getCurrentLanguageTag } from '@/services/i18n';
@@ -714,7 +714,9 @@ export class NewsPanel extends Panel {
     // cluster.sourceCount is the article count, which read nine reprints of
     // one wire across one newsroom's feeds as nine sources. The velocity
     // badge below keeps sourceCount — velocity IS about article volume.
-    const publisherCount = cluster.uniquePublisherCount ?? 0;
+    const evidence = evidenceFromCluster(cluster);
+    const corroboration = assessCorroboration(evidence);
+    const publisherCount = badgePublisherCount(corroboration, cluster.uniquePublisherCount ?? 0);
     const sourceBadge = publisherCount > 1
       ? `<span class="source-count">${t('components.newsPanel.sources', { count: String(publisherCount) })}</span>`
       : '';
@@ -741,8 +743,6 @@ export class NewsPanel extends Panel {
       facts: primaryProvenanceFacts,
     } = renderPrimarySourceProvenance(cluster.primarySource);
 
-    const evidence = evidenceFromCluster(cluster);
-    const corroboration = assessCorroboration(evidence);
     const rosterView = describePublisherRoster(corroboration, publisherRoster(evidence));
 
     const assetContext = getClusterAssetContext(cluster);

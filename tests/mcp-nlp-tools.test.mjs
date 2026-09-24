@@ -13,6 +13,7 @@ import {
   proReq,
 } from './helpers/mcp-pro-deps.mjs';
 import { documentedOutputSchema } from './helpers/mcp-output-schema.mjs';
+import { PUBLISHER_FAMILIES } from '../shared/publisher-families.js';
 
 const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
@@ -262,7 +263,7 @@ describe('#5697 NLP MCP tools', () => {
     assert.deepEqual(clusterSchema.properties.sourceProvenance.items.properties.tier.enum, [1, 2, 3, 4, null]);
     assert.ok(clusterSchema.required.includes('publishers'));
     assert.ok(clusterSchema.required.includes('publishersUnlisted'));
-    assert.deepEqual(clusterSchema.properties.publishers.items.required, ['name', 'tier', 'labels']);
+    assert.deepEqual(clusterSchema.properties.publishers.items.required, ['name', 'tier', 'labels', 'labelsUnlisted']);
     assert.deepEqual(clusterSchema.properties.publishers.items.properties.tier.enum, [1, 2, 3, 4, null]);
     assert.equal(clusterSchema.properties.publishersUnlisted.type, 'integer');
     const digestCoverageFields = [
@@ -853,10 +854,19 @@ describe('#5697 NLP MCP tools', () => {
     });
 
     it('stays inside the dispatcher budget at the maximum provenance-rich shape', async () => {
-      const sources = Array.from(
-        { length: 8 },
-        (_, sourceIndex) => `source${sourceIndex}-${'s'.repeat(5_000)}`,
-      );
+      // 25 clusters x 40 members fills MAX_CLUSTER_NEWS_ITEMS. Eight publisher
+      // families per cluster: Reuters with all twelve curated labels, past the
+      // wire's label cap, and seven uncurated families at the cap, whose
+      // labels differ only in case and so fold into one family each.
+      const caseVariant = (base, variant) => [...base]
+        .map((char, index) => (index < 6 && (variant >> index) & 1 ? char.toUpperCase() : char)).join('');
+      const sources = [
+        ...PUBLISHER_FAMILIES.reuters.labels,
+        ...Array.from({ length: 7 }, (_, family) => Array.from(
+          { length: 4 },
+          (_, variant) => caseVariant(`source${family}-${'s'.repeat(5_000)}`, variant),
+        )).flat(),
+      ];
       const items = Array.from({ length: 25 }, (_, clusterIndex) => (
         sources.map((source, sourceIndex) => ({
           source,
@@ -882,6 +892,13 @@ describe('#5697 NLP MCP tools', () => {
           result.clusters.every((cluster) => cluster.publishers.length === 8),
           'the fixture must actually exercise all eight roster slots',
         );
+        for (const cluster of result.clusters) {
+          assert.deepEqual(
+            cluster.publishers.map((publisher) => [publisher.labels.length, publisher.labelsUnlisted]),
+            [[4, 8], ...Array.from({ length: 7 }, () => [4, 0])],
+            'every family lists its first four labels and counts the rest',
+          );
+        }
         for (const cluster of result.clusters) {
           assert.ok(Buffer.byteLength(cluster.title, 'utf8') <= 512);
           assert.ok(Buffer.byteLength(cluster.link, 'utf8') <= 2_048);
@@ -1200,6 +1217,8 @@ describe('#5697 NLP MCP tools', () => {
         assert.deepEqual(aboveSeen.corroboration, { state: 'corroborated', publishers: 3 },
           'a digest count above the seen families means unseen publishers of unknown tier');
         assert.equal(aboveSeen.distinctSourceCount, 2, 'distinctSourceCount stays the member-family count min_sources filters on');
+        assert.equal(aboveSeen.publishers.length, 2);
+        assert.equal(aboveSeen.publishersUnlisted, 1, 'the roster names 2 of the 3 publishers the verdict counts');
 
         const mixed = await corroborationOf([['The Verge'], ['Reuters World']]);
         assert.deepEqual(mixed.corroboration, { state: 'corroborated', publishers: 2 });
@@ -1229,9 +1248,9 @@ describe('#5697 NLP MCP tools', () => {
           { 'The Verge': 4, 'Reuters World': 1, 'Reuters US': 1, 'The Vergecast': 3, 'Unreviewed Local Desk': null },
         );
         assert.deepEqual(cluster.publishers, [
-          { name: 'Reuters', tier: 1, labels: ['Reuters World', 'Reuters US'] },
-          { name: 'The Verge', tier: 3, labels: ['The Verge', 'The Vergecast'] },
-          { name: 'Unreviewed Local Desk', tier: null, labels: ['Unreviewed Local Desk'] },
+          { name: 'Reuters', tier: 1, labels: ['Reuters World', 'Reuters US'], labelsUnlisted: 0 },
+          { name: 'The Verge', tier: 3, labels: ['The Verge', 'The Vergecast'], labelsUnlisted: 0 },
+          { name: 'Unreviewed Local Desk', tier: null, labels: ['Unreviewed Local Desk'], labelsUnlisted: 0 },
         ]);
         assert.equal(cluster.publishersUnlisted, 0);
         assert.equal(cluster.publishers.length, cluster.distinctSourceCount, 'roster and count read the same members');

@@ -251,11 +251,12 @@ function addNewsSourceProvenance(value: unknown): unknown {
       record.uniqueSourceCount ?? record.corroborationSourceCount ?? 1,
     );
     const evidence = evidenceFromStory(record);
+    const verdict = assessCorroboration(evidence);
     return {
       ...record,
       sourceProvenance: provenance,
-      corroboration: toCorroborationJson(assessCorroboration(evidence)),
-      ...toPublisherRosterJson(publisherRoster(evidence)),
+      corroboration: toCorroborationJson(verdict),
+      ...toPublisherRosterJson(publisherRoster(evidence), verdict),
       credibilityScore: servedScore !== null
         ? servedScore
         : computeCredibilityScore({

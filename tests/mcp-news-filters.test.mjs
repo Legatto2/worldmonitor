@@ -12,6 +12,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CACHE_TOOLS } from '../api/mcp/registry/cache-tools.ts';
+import { PUBLISHER_FAMILIES } from '../shared/publisher-families.js';
 
 const newsTool = CACHE_TOOLS.find((tool) => tool.name === 'get_news_intelligence');
 
@@ -228,6 +229,8 @@ describe('get_news_intelligence corroboration (#6419)', () => {
     newsTool._postFilter(data, {});
 
     assert.deepEqual(data.insights.topStories[0].corroboration, { state: 'corroborated', publishers: 3 });
+    assert.equal(data.insights.topStories[0].publishers.length, 1);
+    assert.equal(data.insights.topStories[0].publishersUnlisted, 2, 'the roster names 1 of the 3 publishers the verdict counts');
   });
 });
 
@@ -243,9 +246,9 @@ describe('get_news_intelligence publisher roster (#6419 step 3)', () => {
 
     const [mixed, legacy, malformed] = data.insights.topStories;
     assert.deepEqual(mixed.publishers, [
-      { name: 'Reuters', tier: 1, labels: ['Reuters World', 'Reuters US'] },
-      { name: 'The Verge', tier: 4, labels: ['The Verge'] },
-      { name: 'Unreviewed Local Desk', tier: null, labels: ['Unreviewed Local Desk'] },
+      { name: 'Reuters', tier: 1, labels: ['Reuters World', 'Reuters US'], labelsUnlisted: 0 },
+      { name: 'The Verge', tier: 4, labels: ['The Verge'], labelsUnlisted: 0 },
+      { name: 'Unreviewed Local Desk', tier: null, labels: ['Unreviewed Local Desk'], labelsUnlisted: 0 },
     ]);
     assert.equal(mixed.publishersUnlisted, 0);
     assert.deepEqual([legacy.publishers, legacy.publishersUnlisted], [[], 0]);
@@ -254,8 +257,45 @@ describe('get_news_intelligence publisher roster (#6419 step 3)', () => {
 
   it('documents the roster in the output schema', () => {
     const storySchema = newsTool.outputSchema.properties.data.properties.insights.properties.topStories.items;
-    assert.deepEqual(storySchema.properties.publishers.items.required, ['name', 'tier', 'labels']);
+    assert.deepEqual(storySchema.properties.publishers.items.required, ['name', 'tier', 'labels', 'labelsUnlisted']);
     assert.deepEqual(storySchema.properties.publishers.items.properties.tier.enum, [1, 2, 3, 4, null]);
     assert.equal(storySchema.properties.publishersUnlisted.type, 'integer');
+  });
+  it('bounds eight stories of full rosters to an eighth of the output budget', () => {
+    const caseVariant = (base, variant) => [...base]
+      .map((char, index) => (index < 6 && (variant >> index) & 1 ? char.toUpperCase() : char)).join('');
+    // Ten families per story, past the eight-publisher cap: Reuters with all
+    // twelve curated labels, and nine uncurated families of six case variants
+    // of one long label each, past the four-label cap.
+    const sources = [
+      ...PUBLISHER_FAMILIES.reuters.labels,
+      ...Array.from({ length: 9 }, (_, family) => Array.from(
+        { length: 6 },
+        (_, variant) => caseVariant(`desk${family}-${'d'.repeat(500)}`, variant),
+      )).flat(),
+    ];
+    const data = envelope(Array.from({ length: 8 }, (_, i) => story({ primaryTitle: `story ${i}`, sources })));
+
+    newsTool._postFilter(data, {});
+
+    const stories = data.insights.topStories;
+    assert.equal(stories.length, 8);
+    for (const top of stories) {
+      assert.equal(top.publishers.length, 8);
+      assert.equal(top.publishersUnlisted, 2);
+      for (const publisher of top.publishers) {
+        assert.ok(publisher.labels.length <= 4);
+        assert.ok(Buffer.byteLength(publisher.name, 'utf8') <= 40);
+        assert.ok(publisher.labels.every((label) => Buffer.byteLength(label, 'utf8') <= 40));
+      }
+    }
+    const rosterBytes = stories.reduce((sum, top) => sum
+      + Buffer.byteLength(JSON.stringify({ publishers: top.publishers, publishersUnlisted: top.publishersUnlisted }), 'utf8'), 0);
+    // The seeded story fields around it are served as stored; the roster is
+    // the part this tool adds, so its worst case is what the budget must absorb.
+    assert.ok(
+      rosterBytes <= newsTool._outputBudgetBytes / 8,
+      `eight full rosters cost ${rosterBytes} bytes; keep them within an eighth of the ${newsTool._outputBudgetBytes}-byte budget`,
+    );
   });
 });

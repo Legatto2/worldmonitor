@@ -345,6 +345,8 @@ describe('publisherRoster agrees with assessCorroboration', () => {
         } else {
           assert.ok(roster.length > 0, context);
           assert.ok(verdict.publishers >= roster.length, context);
+          const json = toPublisherRosterJson(roster, verdict);
+          assert.equal(json.publishers.length + json.publishersUnlisted, verdict.publishers, `${context}: the wire roster reconciles with the verdict`);
         }
       }
     }
@@ -355,16 +357,29 @@ describe('publisherRoster agrees with assessCorroboration', () => {
 describe('publisher roster wire form', () => {
   it(`lists at most ${PUBLISHER_ROSTER_CAP} publishers and counts the rest`, () => {
     const labels = Array.from({ length: PUBLISHER_ROSTER_CAP + 4 }, (_, i) => `${UNDECLARED} ${i}`);
-    const json = toPublisherRosterJson(publisherRoster(grouped(['Reuters World', ...labels])));
+    const evidence = grouped(['Reuters World', ...labels]);
+    const json = toPublisherRosterJson(publisherRoster(evidence), assessCorroboration(evidence));
     assert.equal(json.publishers.length, PUBLISHER_ROSTER_CAP);
     assert.equal(json.publishersUnlisted, 5);
-    assert.deepEqual(json.publishers[0], { name: 'Reuters', tier: 1, labels: ['Reuters World'] });
-    assert.deepEqual(toPublisherRosterJson([]), { publishers: [], publishersUnlisted: 0 });
+    assert.deepEqual(json.publishers[0], { name: 'Reuters', tier: 1, labels: ['Reuters World'], labelsUnlisted: 0 });
+    assert.deepEqual(toPublisherRosterJson([], { state: 'unknown' }), { publishers: [], publishersUnlisted: 0 });
+  });
+
+  it('counts publishers the verdict knows of but the labels cannot name', () => {
+    const above = grouped(['Reuters World', 'BBC World'], 5);
+    assert.equal(toPublisherRosterJson(publisherRoster(above), assessCorroboration(above)).publishersUnlisted, 3);
+    const labels = Array.from({ length: PUBLISHER_ROSTER_CAP + 2 }, (_, i) => `${UNDECLARED} ${i}`);
+    const cappedAndAbove = grouped(labels, PUBLISHER_ROSTER_CAP + 6);
+    assert.equal(
+      toPublisherRosterJson(publisherRoster(cappedAndAbove), assessCorroboration(cappedAndAbove)).publishersUnlisted,
+      6,
+      'past the cap and beyond the labels are one count, not two',
+    );
   });
 
   it(`caps wire strings at ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes without splitting a character`, () => {
     const long = `${'é'.repeat(30)}${'本'.repeat(10)}`;
-    const [publisher] = toPublisherRosterJson(publisherRoster(grouped([long]))).publishers;
+    const [publisher] = toPublisherRosterJson(publisherRoster(grouped([long])), assessCorroboration(grouped([long]))).publishers;
     assert.equal(publisher!.name, 'é'.repeat(20));
     assert.deepEqual(publisher!.labels, ['é'.repeat(20)]);
   });
@@ -382,7 +397,7 @@ describe('publisher roster wire form', () => {
     const tier = schema.publishers.items.properties.tier;
     assert.deepEqual(tier.enum, [1, 2, 3, 4, null]);
     for (const meaning of Object.values(TIER_MEANING)) assert.ok(tier.description.includes(meaning), meaning);
-    assert.deepEqual(schema.publishers.items.required, ['name', 'tier', 'labels']);
+    assert.deepEqual(schema.publishers.items.required, ['name', 'tier', 'labels', 'labelsUnlisted']);
   });
 });
 

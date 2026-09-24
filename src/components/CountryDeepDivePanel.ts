@@ -3919,7 +3919,7 @@ export class CountryDeepDivePanel implements CountryBriefPanel {
       const factors = sections.find(section => section.id === 'factors')?.content.cloneNode(true) as HTMLElement | undefined;
       factors?.querySelector('.cdp-scorecard-evidence')?.remove();
       const headlines = this.el('div');
-      for (const row of Array.from(this.newsBody?.querySelectorAll<HTMLElement>('.cdp-news-item') ?? []).slice(0, 3)) headlines.append(freezeBriefContent(row));
+      for (const row of Array.from(this.newsBody?.querySelectorAll<HTMLElement>('.cdp-news-entry') ?? []).slice(0, 3)) headlines.append(freezeBriefContent(row));
       if (!headlines.childElementCount) headlines.append(this.makeEmpty('No headlines available in this snapshot.'));
       const snapshot: import('./CountryBriefOutput').BriefOutputSnapshot = {
         country: this.currentName, code, capturedAt: new Date().toISOString(), sections,

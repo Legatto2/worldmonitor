@@ -13,7 +13,8 @@ export {
   type Publisher,
   type PublisherRoster,
 } from '../../server/_shared/corroboration';
-export { TIER_DOCS_HREF, type DeclaredTier } from '../../server/_shared/source-tiers';
+export type { DeclaredTier } from '../../server/_shared/source-tiers';
+export { TIER_DOCS_HREF } from './tier-docs';
 
 export type CorroborationFlag = { readonly text: string; readonly hint: string };
 
@@ -42,4 +43,13 @@ export function corroborationFlagHtml(c: Corroboration): string {
   return flag
     ? `<span class="corroboration-flag" title="${escapeHtml(flag.hint)}">${escapeHtml(flag.text)}</span>`
     : '';
+}
+
+/**
+ * The publisher count a "N sources" badge shows. It reads the verdict, the same
+ * number the publisher roster summary shows, so a card never states two counts.
+ * An unknown verdict has no count, so the badge keeps the caller's own.
+ */
+export function badgePublisherCount(c: Corroboration, fallback: number): number {
+  return c.state === 'unknown' ? fallback : c.publishers;
 }

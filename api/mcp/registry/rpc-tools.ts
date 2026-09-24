@@ -30,11 +30,15 @@ import { normalizeCountry } from '../../../server/_shared/intel-history-client';
 import { normalizePassengerCount } from '../../../server/_shared/passenger-count';
 import {
   CORROBORATION_OUTPUT_SCHEMA,
+  PUBLISHER_ROSTER_OUTPUT_PROPERTIES,
   assessCorroboration,
   evidenceFromItem,
   evidenceFromStory,
+  publisherRoster,
   toCorroborationJson,
+  toPublisherRosterJson,
   type CorroborationJson,
+  type PublisherRosterJson,
 } from '../../../server/_shared/corroboration';
 import {
   collectInsightSources,
@@ -217,7 +221,7 @@ type McpWorldBriefStory = {
   sourceTier?: number;
   sources?: string[];
   corroboration: CorroborationJson;
-};
+} & PublisherRosterJson;
 
 // The per-story outlet list is the only unbounded sub-array on this payload, so
 // cap it here rather than trusting the producer — get_world_brief has a 64 KB
@@ -232,9 +236,11 @@ function projectStoryCorroboration(title: string, story: Record<string, unknown>
     typeof value === 'number' && Number.isFinite(value) ? value : undefined
   );
   const evidence = evidenceFromStory(story);
+  const verdict = assessCorroboration(evidence);
   const projected: McpWorldBriefStory = {
     title,
-    corroboration: toCorroborationJson(assessCorroboration(evidence)),
+    corroboration: toCorroborationJson(verdict),
+    ...toPublisherRosterJson(publisherRoster(evidence), verdict),
   };
   const sourceCount = finite(story.sourceCount);
   const uniqueSourceCount = finite(story.uniqueSourceCount);
@@ -1344,7 +1350,7 @@ export const RPC_TOOLS: ToolDef[] = [
   {
     name: 'get_world_brief',
     _outputBudgetBytes: 65536,
-    description: 'Citation-grounded world intelligence brief from the same precomputed news:insights:v1 snapshot used by the dashboard. The insights seeder applies corroboration, citation, and hallucination gates before publishing; this tool reads that accepted result without a request-time LLM call. The optional geo_context field is retained for client compatibility and does not alter the seeded global snapshot. Each headline is paired with an index-aligned topStories entry carrying the story corroboration evidence published by its snapshot: uniqueSourceCount (distinct outlets), corroborationSourceCount, entityCorroboration, sourceTier, the outlet names themselves, and corroboration, derived from those outlet names; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. Legacy snapshots omit corroboration fields they did not publish. When the seeder has not published inside the 60-minute freshness window the last-known-good snapshot is served rather than failing, flagged by stale:true with ageMinutes — the content is unchanged and still fully gated, so weigh its age rather than discarding it. Serving is capped at 3h old; past that, and for a snapshot that is absent or broken rather than merely old, the source is reported unavailable.',
+    description: 'Citation-grounded world intelligence brief from the same precomputed news:insights:v1 snapshot used by the dashboard. The insights seeder applies corroboration, citation, and hallucination gates before publishing; this tool reads that accepted result without a request-time LLM call. The optional geo_context field is retained for client compatibility and does not alter the seeded global snapshot. Each headline is paired with an index-aligned topStories entry carrying the story corroboration evidence published by its snapshot: uniqueSourceCount (distinct outlets), corroborationSourceCount, entityCorroboration, sourceTier, the outlet names themselves, corroboration, and the publishers roster with each publisher\'s declared tier, both derived from those outlet names; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. Legacy snapshots omit corroboration fields they did not publish. When the seeder has not published inside the 60-minute freshness window the last-known-good snapshot is served rather than failing, flagged by stale:true with ageMinutes — the content is unchanged and still fully gated, so weigh its age rather than discarding it. Serving is capped at 3h old; past that, and for a snapshot that is absent or broken rather than merely old, the source is reported unavailable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1376,6 +1382,7 @@ export const RPC_TOOLS: ToolDef[] = [
                 description: 'Outlet names that carried the story, tier-sorted and deduped, capped at 12. Distinct from this tool top-level sources field, which carries citation records rather than outlet names. Omitted when unavailable.',
               },
               corroboration: CORROBORATION_OUTPUT_SCHEMA,
+              ...PUBLISHER_ROSTER_OUTPUT_PROPERTIES,
             },
           },
         },

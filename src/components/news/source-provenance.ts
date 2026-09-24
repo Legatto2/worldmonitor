@@ -11,6 +11,7 @@ import {
   resolveRegisteredTelegramSourceName,
   resolveTelegramSourceName,
 } from '@/config/feeds';
+import type { PropagandaRisk } from '@/types';
 import { escapeHtml } from '@/utils/sanitize';
 
 export { resolveRegisteredTelegramSourceName, resolveTelegramSourceName };
@@ -118,20 +119,50 @@ export function renderPrimarySourceProvenance(sourceName: string): PrimarySource
   };
 }
 
+/** A corroborating source's risk marker, ranked so a publisher with several feeds shows its most severe. */
+export interface CorroboratingRiskBadge extends SourceProvenanceBadge {
+  readonly severity: number;
+}
+
+/** State media above caution above unreviewed above a reviewed government marker above a perspective fact. */
+const RISK_SEVERITY: Readonly<Record<PropagandaRisk | 'fact', number>> = {
+  high: 4,
+  medium: 3,
+  unknown: 2,
+  low: 1,
+  fact: 0,
+};
+
 /** The compact risk marker shown beside a corroborating source; null when there is nothing to disclose. */
-export function getCorroboratingSourceRiskBadge(sourceName: string): SourceProvenanceBadge | null {
+export function getCorroboratingSourceRiskBadge(sourceName: string): CorroboratingRiskBadge | null {
   const profile = getSourcePropagandaRisk(sourceName);
   const sourceType = getSourceType(sourceName);
   const description = describePropagandaBadge(profile, sourceType);
   if (description) {
-    return { className: `propaganda-badge ${description.risk}`, title: description.title, label: description.shortLabel };
+    return {
+      className: `propaganda-badge ${description.risk}`,
+      title: description.title,
+      label: description.shortLabel,
+      severity: RISK_SEVERITY[description.risk],
+    };
   }
   if (getProvenanceFacts(profile, sourceType).length > 0) {
     return {
       className: 'provenance-fact-marker',
       title: `${composeProvenanceSummary(profile, sourceType)} ${PERSPECTIVE_LABEL_CAVEAT}`,
       label: '◐',
+      severity: RISK_SEVERITY.fact,
     };
   }
   return null;
+}
+
+/** The most severe marker among a publisher's feeds; the first seen wins a tie. */
+export function mostSevereRiskBadge(sourceNames: readonly string[]): CorroboratingRiskBadge | null {
+  let worst: CorroboratingRiskBadge | null = null;
+  for (const name of sourceNames) {
+    const badge = getCorroboratingSourceRiskBadge(name);
+    if (badge && (worst === null || badge.severity > worst.severity)) worst = badge;
+  }
+  return worst;
 }
