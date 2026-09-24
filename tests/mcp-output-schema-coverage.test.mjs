@@ -905,7 +905,7 @@ describe('api/mcp.ts — per-tool outputSchema coverage (v1.7.0)', () => {
   // `adds` lists the keys `_execute` layers on top; they are legitimately
   // absent from the wire, so they are subtracted before comparing.
   const SPREAD_PASSTHROUGH_TOOLS = new Map([
-    ['get_country_brief', { adds: ['digestCoverage', 'groundingStories'] }],
+    ['get_country_brief', { adds: ['digestCoverage', 'groundingStories', 'sources[].sourceProvenance'] }],
   ]);
 
   for (const [toolName, { adds }] of SPREAD_PASSTHROUGH_TOOLS) {

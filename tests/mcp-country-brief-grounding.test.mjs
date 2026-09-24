@@ -12,6 +12,7 @@ import { strict as assert } from 'node:assert';
 
 import { __testing__, mcpHandler } from '../api/mcp.ts';
 import { HMAC_SECRET, callBody, makePipelineMock } from './helpers/mcp-pro-deps.mjs';
+import { getSourceProvenanceState, SOURCE_PROPAGANDA_RISK } from '../shared/source-provenance.ts';
 
 const ENV_KEY = 'operator_test_key_country_brief_grounding';
 const MCP_URL = 'https://worldmonitor.app/mcp';
@@ -20,6 +21,11 @@ const originalFetch = globalThis.fetch;
 const originalEnv = { ...process.env };
 const originalLog = console.log;
 const originalWarn = console.warn;
+
+function compactProvenance(source) {
+  const { summary, ...provenance } = getSourceProvenanceState(source);
+  return provenance;
+}
 
 function makeDeps() {
   const pipe = makePipelineMock();
@@ -143,6 +149,56 @@ afterEach(() => {
 });
 
 describe('get_country_brief grounding corroboration (#4925 item 3)', () => {
+  it('attaches registry provenance to gateway citations and digest grounding', async () => {
+    stubDownstream({
+      digestItems: [digestItem({ source: 'RT' }), digestItem({ title: 'France other story', source: 'Unknown outlet' })],
+      briefSources: [{ ...UPSTREAM_SOURCES[0], source: 'EuroNews' }],
+    });
+    const payload = await callCountryBrief();
+    assert.deepEqual(payload.sources[0].sourceProvenance, compactProvenance('EuroNews'));
+    assert.deepEqual(payload.sources[0].sourceProvenance.knownBiases, ['Pro-EU']);
+    assert.deepEqual(payload.groundingStories[0].sourceProvenance, compactProvenance('RT'));
+    assert.ok(payload.groundingStories[0].sourceProvenance.stateAffiliated);
+    assert.deepEqual(payload.groundingStories[1].sourceProvenance.knownBiases, []);
+    assert.equal(payload.groundingStories[1].sourceProvenance.stateAffiliated, undefined);
+  });
+
+  it('attaches provenance to fallback citations and declares both response contracts', async () => {
+    stubDownstream({ digestItems: [digestItem({ source: 'RT' })], briefSources: [] });
+    const payload = await callCountryBrief();
+    assert.deepEqual(payload.sources[0].sourceProvenance, compactProvenance('RT'));
+    const tool = __testing__.TOOL_REGISTRY.find(candidate => candidate.name === 'get_country_brief');
+    for (const field of ['sources', 'groundingStories']) {
+      const schema = tool.outputSchema.properties[field].items;
+      assert.ok(schema.required.includes('sourceProvenance'));
+      assert.ok(schema.properties.sourceProvenance.required.includes('knownBiases'));
+      assert.ok(schema.properties.sourceProvenance.properties.stateAffiliated);
+    }
+    assert.ok(tool.outputSchema.properties.groundingStories.items.properties.publishers);
+  });
+
+  it('retains sibling publishers beyond the context cap and folds publisher families', async () => {
+    const first = digestItem({ source: 'Reuters', corroborationCount: 4 });
+    const filler = Array.from({ length: 15 }, (_, i) => digestItem({ title: `France unrelated item ${i}` }));
+    stubDownstream({ digestItems: [first, ...filler,
+      { ...first, source: 'Reuters World' }, { ...first, source: 'BBC World' },
+    ] });
+    const payload = await callCountryBrief();
+    const story = payload.groundingStories[0];
+    assert.equal(story.publishers.length, 2);
+    assert.ok(story.publishers.some(p => p.labels.includes('Reuters') && p.labels.includes('Reuters World')));
+    assert.ok(story.publishers.some(p => p.labels.includes('BBC World') && p.tier === 2));
+    assert.equal(story.publishersUnlisted, 2);
+    assert.equal(story.publishers.length + story.publishersUnlisted, story.corroboration.publishers);
+  });
+
+  it('ignores a malformed sibling source without losing valid grounding', async () => {
+    stubDownstream({ digestItems: [digestItem({ source: 'Reuters' }), digestItem({ source: 123 })] });
+    const payload = await callCountryBrief();
+    assert.equal(payload.groundingStories.length, 1);
+    assert.equal(payload.groundingStories[0].publishers[0].name, 'Reuters');
+  });
+
   it('declares the stale opt-in and machine-readable digest coverage contract', () => {
     const tool = __testing__.TOOL_REGISTRY.find(candidate => candidate.name === 'get_country_brief');
     assert.ok(tool);
@@ -326,6 +382,9 @@ describe('get_country_brief grounding corroboration (#4925 item 3)', () => {
       publishedAt: '2026-08-10T00:00:00.000Z',
       corroborationCount: 4,
       corroboration: { state: 'corroborated', publishers: 4 },
+      sourceProvenance: compactProvenance('Example Wire'),
+      publishers: [{ name: 'Example Wire', tier: null, labels: ['Example Wire'], labelsUnlisted: 0 }],
+      publishersUnlisted: 3,
       mentionCount: 3,
       storyPhase: 'STORY_PHASE_DEVELOPING',
     }]);
@@ -405,6 +464,9 @@ describe('get_country_brief grounding corroboration (#4925 item 3)', () => {
       url: 'https://example.com/count-only',
       corroborationCount: 2,
       corroboration: { state: 'corroborated', publishers: 2 },
+      sourceProvenance: compactProvenance('Example Wire'),
+      publishers: [{ name: 'Example Wire', tier: null, labels: ['Example Wire'], labelsUnlisted: 0 }],
+      publishersUnlisted: 1,
     }]);
   });
 
@@ -436,5 +498,37 @@ describe('get_country_brief grounding corroboration (#4925 item 3)', () => {
       Buffer.byteLength(rawText, 'utf8') < 65_536,
       `serialized country brief is ${Buffer.byteLength(rawText, 'utf8')} bytes, over the 65536 budget`,
     );
+  });
+
+  it('fits six citations and full bounded publisher rosters with registry provenance under the tool budget', async () => {
+    const source = Object.keys(SOURCE_PROPAGANDA_RISK).sort((a, b) =>
+      Buffer.byteLength(JSON.stringify(getSourceProvenanceState(b))) - Buffer.byteLength(JSON.stringify(getSourceProvenanceState(a))),
+    )[0];
+    const primary = Array.from({ length: 6 }, (_, i) => digestItem({
+      title: `France ${i} ${'界'.repeat(160)}`,
+      source,
+      link: `https://example.com/${'x'.repeat(6_000)}-${i}`,
+      corroborationCount: 12,
+    }));
+    const labels = Array.from({ length: 9 }, (_, i) => `${i}${'a'.repeat(39)}`);
+    const siblings = primary.flatMap(item => labels.flatMap(label => [
+      label, label.toUpperCase(), `${label.slice(0, 2).toUpperCase()}${label.slice(2)}`,
+      `${label.slice(0, 3).toUpperCase()}${label.slice(3)}`, `${label.slice(0, 4).toUpperCase()}${label.slice(4)}`,
+    ].map(source => ({ ...item, source }))));
+    stubDownstream({ digestItems: [...primary, ...siblings], briefSources: primary, briefExtras: { brief: 'b'.repeat(4_000) } });
+    const { payload, rawText } = await callCountryBriefResult();
+    assert.equal(payload._budget_exceeded, undefined, JSON.stringify(payload));
+    assert.equal(payload.sources.length, 6);
+    assert.equal(payload.groundingStories.length, 6);
+    for (const story of payload.groundingStories) {
+      assert.equal(story.publishers.length, 8);
+      assert.equal(story.publishersUnlisted, 4);
+      assert.ok(story.publishers.some(publisher => publisher.labels.length === 4 && publisher.labelsUnlisted === 1));
+      assert.deepEqual(story.sourceProvenance, compactProvenance(source));
+    }
+    const tool = __testing__.TOOL_REGISTRY.find(candidate => candidate.name === 'get_country_brief');
+    const bytes = Buffer.byteLength(rawText, 'utf8');
+    assert.ok(bytes < tool._outputBudgetBytes, `${bytes} bytes must fit ${tool._outputBudgetBytes}`);
+    process.stdout.write(`Country brief maximum-list fixture: ${bytes}/${tool._outputBudgetBytes} bytes\n`);
   });
 });

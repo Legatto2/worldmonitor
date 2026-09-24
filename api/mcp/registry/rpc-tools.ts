@@ -7,6 +7,7 @@ import { resolveCountryCode } from '../../../shared/country-code-resolve';
 import { countryMentionTerms, mentionsCountry } from '../../../shared/country-mention.js';
 import { isBriefRelevantTitle } from '../../../shared/brief-relevance.js';
 import { isOpenSkyProvider } from '../../../shared/provider-redistribution';
+import { getSourceProvenanceState, type SourceProvenanceState } from '../../../shared/source-provenance';
 import {
   CHINA_DECISION_SIGNAL_GROUP_IDS,
   CHINA_DECISION_SIGNAL_MAX_SERIALIZED_BYTES,
@@ -87,14 +88,10 @@ type McpDigestCoverage = {
   attemptedAt?: string;
 };
 
-// Corroboration for the country brief cannot ride on `sources`: that array is
-// the proto BriefSource shape (title/source/url/publishedAt) returned by the
-// gateway, so widening it would be a proto change, and on the common path the
-// server-side sources win anyway. A sibling field keeps the citation list
-// exactly as it is. (#4925 item 3)
-type McpBriefGroundingStory = {
+type McpBriefGroundingStory = PublisherRosterJson & {
   title: string;
   source: string;
+  sourceProvenance: Omit<SourceProvenanceState, 'summary'>;
   url?: string;
   publishedAt?: string;
   corroborationCount: number;
@@ -108,6 +105,28 @@ type McpBriefGroundingStory = {
 // no longer a valid citation target. The primary `sources` field remains the
 // canonical citation surface.
 const MAX_COUNTRY_BRIEF_GROUNDING_URL_LENGTH = 2_000;
+
+const BRIEF_SOURCE_PROVENANCE_SCHEMA = {
+  type: 'object',
+  description: 'Source provenance without the prose summary to keep the country brief within its output budget.',
+  required: ['risk', 'type', 'riskDeclared', 'typeDeclared', 'riskReviewed', 'typeReviewed', 'knownBiases'],
+  properties: {
+    risk: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
+    type: { type: 'string', enum: ['wire', 'gov', 'intel', 'mainstream', 'market', 'tech', 'other', 'unknown'] },
+    riskDeclared: { type: 'boolean' },
+    typeDeclared: { type: 'boolean' },
+    riskReviewed: { type: 'boolean' },
+    typeReviewed: { type: 'boolean' },
+    stateAffiliated: { type: 'string' },
+    knownBiases: { type: 'array', items: { type: 'string' }, description: 'Curated perspective labels. Empty means no label recorded, not neutral.' },
+    note: { type: 'string' },
+  },
+};
+
+function briefSourceProvenance(source: string): Omit<SourceProvenanceState, 'summary'> {
+  const { summary: _summary, ...provenance } = getSourceProvenanceState(source);
+  return provenance;
+}
 
 function clipBriefText(value: unknown, maxLen: number): string {
   if (typeof value !== 'string') return '';
@@ -166,8 +185,21 @@ function collectMcpBriefSources(
 // a digest predating #4924 yields an empty array rather than a row of zeroes.
 function collectBriefGroundingStories(
   items: readonly DigestItemForBrief[],
+  evidenceItems: readonly DigestItemForBrief[],
   maxStories = 6,
 ): McpBriefGroundingStory[] {
+  const byTitle = new Map<string, { sources: string[]; corroborationCount: number }>();
+  const titleKey = (item: DigestItemForBrief) => (item.title ?? '').replace(/\s+/g, ' ').trim();
+  for (const item of evidenceItems) {
+    const key = titleKey(item);
+    if (!key || typeof item.source !== 'string' || !item.source.trim()) continue;
+    const group = byTitle.get(key) ?? { sources: [], corroborationCount: 0 };
+    if (!group.sources.includes(item.source)) group.sources.push(item.source);
+    if (Number.isFinite(item.corroborationCount)) {
+      group.corroborationCount = Math.max(group.corroborationCount, item.corroborationCount as number);
+    }
+    byTitle.set(key, group);
+  }
   const out: McpBriefGroundingStory[] = [];
   const seen = new Set<string>();
   for (const item of items) {
@@ -181,12 +213,19 @@ function collectBriefGroundingStories(
     const url = normalized.url.length <= MAX_COUNTRY_BRIEF_GROUNDING_URL_LENGTH
       ? normalized.url
       : undefined;
-    const corroborationCount = Number.isFinite(item.corroborationCount) ? item.corroborationCount as number : 0;
+    const group = byTitle.get(titleKey(item));
+    const corroborationCount = group?.corroborationCount ?? 0;
+    const evidence = group && group.sources.length > 1
+      ? evidenceFromStory(group)
+      : evidenceFromItem({ source, corroborationCount });
+    const verdict = assessCorroboration(evidence);
     const story: McpBriefGroundingStory = {
       title,
       source,
+      sourceProvenance: briefSourceProvenance(source),
       corroborationCount,
-      corroboration: toCorroborationJson(assessCorroboration(evidenceFromItem({ source, corroborationCount }))),
+      corroboration: toCorroborationJson(verdict),
+      ...toPublisherRosterJson(publisherRoster(evidence), verdict),
     };
     if (url) story.url = url;
     if (publishedAt) story.publishedAt = publishedAt;
@@ -1503,11 +1542,13 @@ export const RPC_TOOLS: ToolDef[] = [
           description: 'Original feed articles used as grounding inputs for this brief.',
           items: {
             type: 'object',
+            required: ['sourceProvenance'],
             properties: {
               title: { type: 'string' },
               url: { type: 'string' },
               source: { type: 'string' },
               publishedAt: { type: 'string' },
+              sourceProvenance: BRIEF_SOURCE_PROVENANCE_SCHEMA,
             },
           },
         },
@@ -1532,13 +1573,16 @@ export const RPC_TOOLS: ToolDef[] = [
           description: 'Corroboration signals for the digest articles used to ground this brief, so an agent can weigh how well-reported the underlying claims are. Independent of sources, which may instead carry the server-side grounding set, and empty when the digest read failed. Not a citation list — cite from sources.',
           items: {
             type: 'object',
+            required: ['sourceProvenance', 'publishers', 'publishersUnlisted'],
             properties: {
               title: { type: 'string' },
               source: { type: 'string' },
               url: { type: 'string' },
               publishedAt: { type: 'string' },
+              sourceProvenance: BRIEF_SOURCE_PROVENANCE_SCHEMA,
               corroborationCount: { type: 'number', description: 'Distinct outlets carrying this story at digest time.' },
               corroboration: CORROBORATION_OUTPUT_SCHEMA,
+              ...PUBLISHER_ROSTER_OUTPUT_PROPERTIES,
               mentionCount: { type: 'number', description: 'Times the story has been seen across digest cycles since firstSeen.' },
               storyPhase: {
                 type: 'string',
@@ -1600,7 +1644,7 @@ export const RPC_TOOLS: ToolDef[] = [
           // return below prefers the gateway's own source list on the common
           // path — deriving from `sources` would leave this empty most of the
           // time, which is exactly the failure this field exists to avoid.
-          groundingStories = collectBriefGroundingStories(groundingItems, 6);
+          groundingStories = collectBriefGroundingStories(groundingItems, countryItems, 6);
           const sourceLines = sources.length > 0 ? ['Brief source articles:', ...briefSourceContextLines(sources)] : [];
           const headlineLines = groundingItems.map(item => item.title ?? '').filter(Boolean);
           // #7084: the digest can legitimately be a stale replay (a live
@@ -1680,7 +1724,10 @@ export const RPC_TOOLS: ToolDef[] = [
       // is the honest signal: the brief was written without that grounding.
       return {
         ...result,
-        sources: resultSources.length > 0 ? resultSources : sources,
+        sources: (resultSources.length > 0 ? resultSources : sources).map(source => ({
+          ...source,
+          sourceProvenance: briefSourceProvenance(source.source),
+        })),
         groundingStories,
         ...(digestCoverage ? { digestCoverage } : {}),
       };
