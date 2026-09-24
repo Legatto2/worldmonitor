@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { installSwUpdateHandler, OPEN_MODAL_SELECTOR, readServiceWorkerContainer } from '../src/bootstrap/sw-update.ts';
+import { installSwUpdateHandler, RELOAD_BLOCKING_MODAL_SELECTOR, readServiceWorkerContainer } from '../src/bootstrap/sw-update.ts';
 
 // ---------------------------------------------------------------------------
 // Fake environment
@@ -30,7 +30,7 @@ interface FakeEnv {
      * `position: fixed`, so `offsetParent` would always be null — the
      * visibility check must use `checkVisibility()` or `getClientRects()`.
      *
-     * - modalMounted: element exists in DOM (matches OPEN_MODAL_SELECTOR
+     * - modalMounted: element exists in DOM (matches RELOAD_BLOCKING_MODAL_SELECTOR
      *   on query). Maps to UnifiedSettings, SignalModal, etc. — mounted in
      *   their constructor at app startup and left in the DOM for the whole
      *   session.
@@ -42,6 +42,8 @@ interface FakeEnv {
      */
     modalMounted: boolean;
     modalVisible: boolean;
+    /** Models an overlay carrying RELOAD_SAFE_ATTR (the onboarding popover). */
+    modalReloadSafe: boolean;
     supportsCheckVisibility: boolean;
     _removedListeners: Array<() => void>;
     querySelector(sel: string): FakeElement | null;
@@ -79,6 +81,7 @@ function makeEnv(): FakeEnv {
     setVisibilityState(v: string) { _visibilityState = v; },
     modalMounted: false,
     modalVisible: false,
+    modalReloadSafe: false,
     supportsCheckVisibility: true,
     _removedListeners: [],
 
@@ -88,7 +91,10 @@ function makeEnv(): FakeEnv {
     },
 
     querySelectorAll(sel: string): Iterable<FakeElement> {
-      if (sel !== OPEN_MODAL_SELECTOR) return [];
+      if (sel !== RELOAD_BLOCKING_MODAL_SELECTOR) return [];
+      // The real DOM applies `:not([data-reload-safe])` for this selector,
+      // so an opted-out overlay is simply absent from the result set.
+      if (this.modalReloadSafe) return [];
       if (!this.modalMounted && !this.modalVisible) return [];
       const isVisible = this.modalVisible;
       const el: FakeElement = {
@@ -537,6 +543,24 @@ describe('installSwUpdateHandler', () => {
     env.doc.setVisibilityState('hidden');
     fireVisibility(env);
     assert.equal(env.reloadCalls.length, 0, 'reload suppressed while modal is visibly open');
+  });
+
+  it('DOES auto-reload when the open overlay opted out of blocking reloads', () => {
+    // WORLDMONITOR-15X: the onboarding popover auto-opens for every preset-less
+    // user and carries role="dialog". Both automatic reload paths must ignore it
+    // — it holds nothing a reload would lose and re-appears on the next load.
+    env.swContainer._controller = {};
+    install(env);
+    env.swContainer.fireControllerChange();
+    fireDwellTimer(env);
+
+    env.doc.modalMounted = true;
+    env.doc.modalVisible = true;
+    env.doc.modalReloadSafe = true;
+
+    env.doc.setVisibilityState('hidden');
+    fireVisibility(env);
+    assert.equal(env.reloadCalls.length, 1, 'a reload-safe overlay must not suppress the update reload');
   });
 
   it('DOES auto-reload when a modal is mounted-but-hidden (persistent dialog case)', () => {

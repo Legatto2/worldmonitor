@@ -19,10 +19,14 @@
 // the sign-up they were halfway through. A mismatch found under a modal is
 // remembered in `pendingReload` and the module stops fetching; every later
 // trigger retries the reload against the live DOM until one lands. What counts
-// as open is `isModalOpen`, shared with the service-worker updater.
+// as blocking is `findReloadBlockingModal`, shared with the service-worker
+// updater — an overlay may opt out via `RELOAD_SAFE_ATTR` when it holds no
+// state a reload would destroy (WORLDMONITOR-15X: the onboarding popover
+// auto-opens for every preset-less user and was deferring reloads for a broad
+// population, not the sign-up case this guard is for).
 
 import { enqueueSentryCall } from '@/bootstrap/sentry-defer';
-import { isModalOpen, type ModalDocumentLike } from '@/utils/open-modal';
+import { findReloadBlockingModal, type ModalDocumentLike } from '@/utils/open-modal';
 
 interface EventTargetLike {
   addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => void;
@@ -62,12 +66,21 @@ interface StaleBundleCheckOptions {
   /** Override clock (for tests). Default: Date.now. */
   now?: () => number;
   /**
-   * Called once per deferral episode when an open modal holds off a reload.
+   * Called when an open modal holds off a reload: once when an episode
+   * starts, and once more if it survives `wedgeAfterDeferrals` triggers.
    * Default reports to Sentry. A wedged tab (an overlay that never closes)
    * would otherwise keep a stale bundle with no signal anywhere but the
    * user's own console, which is the failure mode this suppression risks.
    */
-  reportDeferral?: (currentHash: string, deployedHash: string) => void;
+  reportDeferral?: (report: DeferralReport) => void;
+  /**
+   * Deferral count at which an episode is reported a second time as a
+   * suspected wedge. Provisional: a genuine email-code wait produces a
+   * couple of triggers, while an overlay that never closes produces one per
+   * focus plus one per periodic tick for the whole session. Getting it wrong
+   * costs one extra Sentry event, never a user-visible reload.
+   */
+  wedgeAfterDeferrals?: number;
   /**
    * Minimum interval between checks. Multiple events within this window
    * collapse to one fetch.
@@ -83,11 +96,23 @@ interface StaleBundleCheckOptions {
   periodicIntervalMs?: number;
 }
 
+/** One report when a deferral starts, one more if it looks wedged. */
+export interface DeferralReport {
+  readonly currentHash: string;
+  readonly deployedHash: string;
+  /** Which overlay held the reload off, for telemetry. */
+  readonly blockedBy: string;
+  /** Triggers deferred so far in this episode, starting at 1. */
+  readonly deferrals: number;
+  readonly phase: 'started' | 'suspected-wedge';
+}
+
 const DEFAULT_MIN_INTERVAL_MS = 60_000;
 /** Wall-clock periodic check. 10min is plenty for stale-bundle detection
  *  (we don't need second-level latency to reload an old bundle) and
  *  respects browser background-tab throttling. */
 const DEFAULT_PERIODIC_INTERVAL_MS = 10 * 60_000;
+const DEFAULT_WEDGE_AFTER_DEFERRALS = 10;
 
 /**
  * Install listeners that compare the running bundle's hash against the
@@ -127,14 +152,26 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
   const setIntervalImpl = options.setInterval ?? ((cb: () => void, ms: number) => globalThis.setInterval(cb, ms));
   const reload = options.reload ?? (() => window.location.reload());
   const now = options.now ?? Date.now;
-  const reportDeferral = options.reportDeferral ?? ((current: string, deployed: string) => {
+  const reportDeferral = options.reportDeferral ?? ((report: DeferralReport) => {
     enqueueSentryCall((Sentry) => {
-      Sentry.captureMessage('[stale-bundle] reload deferred, modal open', {
-        level: 'warning',
-        tags: { surface: 'stale-bundle', current_hash: current, deployed_hash: deployed },
-      });
+      Sentry.captureMessage(
+        report.phase === 'suspected-wedge'
+          ? '[stale-bundle] reload still deferred, modal never closed'
+          : '[stale-bundle] reload deferred, modal open',
+        {
+          level: 'warning',
+          tags: {
+            surface: 'stale-bundle',
+            current_hash: report.currentHash,
+            deployed_hash: report.deployedHash,
+            blocked_by: report.blockedBy,
+            deferrals: String(report.deferrals),
+          },
+        },
+      );
     });
   });
+  const wedgeAfterDeferrals = options.wedgeAfterDeferrals ?? DEFAULT_WEDGE_AFTER_DEFERRALS;
   const minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
   const periodicIntervalMs = options.periodicIntervalMs ?? DEFAULT_PERIODIC_INTERVAL_MS;
 
@@ -153,6 +190,8 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
    * `check()` returns before consulting them.
    */
   let pendingReload: string | null = null;
+  /** Triggers deferred in the current episode. Reset when a reload lands. */
+  let deferrals = 0;
 
   /**
    * Reload now, or remember the debt and return while a modal is on screen.
@@ -166,16 +205,26 @@ export function installStaleBundleCheck(options: StaleBundleCheckOptions = {}): 
    * #3466's safety property wins that tie.
    */
   const reloadOrDefer = (deployedHash: string): void => {
-    if (documentTarget && isModalOpen(documentTarget)) {
-      if (pendingReload === null) {
+    const blockedBy = documentTarget ? findReloadBlockingModal(documentTarget) : null;
+    if (blockedBy !== null) {
+      deferrals += 1;
+      // Two reports per episode at most: one naming the overlay, and one if
+      // the overlay outlasts any plausible email-code wait.
+      const phase = pendingReload === null
+        ? 'started'
+        : deferrals === wedgeAfterDeferrals
+          ? 'suspected-wedge'
+          : null;
+      if (phase !== null) {
         // eslint-disable-next-line no-console
-        console.warn('[stale-bundle] reload deferred, modal open:', currentHash, '→', deployedHash);
-        reportDeferral(currentHash, deployedHash);
+        console.warn('[stale-bundle] reload deferred, modal open:', blockedBy, currentHash, '→', deployedHash);
+        reportDeferral({ currentHash, deployedHash, blockedBy, deferrals, phase });
       }
       pendingReload = deployedHash;
       return;
     }
     pendingReload = null;
+    deferrals = 0;
     // eslint-disable-next-line no-console
     console.warn('[stale-bundle] reload:', currentHash, '→', deployedHash);
     reload();
