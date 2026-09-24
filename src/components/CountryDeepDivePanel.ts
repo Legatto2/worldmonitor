@@ -1,6 +1,9 @@
 import type { CountryBriefSignals } from '@/types';
 import {
+  PERSPECTIVE_LABEL_CAVEAT,
+  composeProvenanceSummary,
   describePropagandaBadge,
+  getProvenanceFacts,
   getSourcePropagandaRisk,
   getSourceTier,
   getSourceTierBadgeTitle,
@@ -461,20 +464,18 @@ export class CountryDeepDivePanel implements CountryBriefPanel {
       const risk = getSourcePropagandaRisk(item.source);
       const riskDescription = describePropagandaBadge(risk, sourceType);
       if (riskDescription) {
-        const riskLabel = risk.stateAffiliated
-          ? `${riskDescription.label}: ${risk.stateAffiliated}`
-          : riskDescription.label;
         const riskBadge = this.badge(
-          riskLabel,
+          riskDescription.label,
           `cdp-state-badge propaganda-badge ${riskDescription.risk}`,
         );
-        riskBadge.setAttribute(
-          'title',
-          risk.stateAffiliated
-            ? `${sourceType === 'gov' ? 'Official government source' : 'State-affiliated'}: ${risk.stateAffiliated}. ${riskDescription.title}`
-            : riskDescription.title,
-        );
+        riskBadge.setAttribute('title', riskDescription.title);
         top.append(riskBadge);
+      }
+      const factTitle = `${composeProvenanceSummary(risk, sourceType)} ${PERSPECTIVE_LABEL_CAVEAT}`;
+      for (const fact of getProvenanceFacts(risk, sourceType)) {
+        const factBadge = this.badge(fact.label, `cdp-state-badge provenance-fact ${fact.kind}`);
+        factBadge.setAttribute('title', factTitle);
+        top.append(factBadge);
       }
 
       const title = this.el('div', 'cdp-news-title', decodeHtmlEntities(item.title));

@@ -829,6 +829,25 @@ Distinct from expected runtime, which is usually far smaller. Admission is
 decided on the worst case, so an over-declared timeout costs the bundle budget
 the member will never actually spend.
 
+### Fetch Phase Budget
+
+The wall-clock ceiling a member places on its own fetching, so that whatever it
+does after fetching — falling back to a second source, extending last-good data,
+publishing a degraded payload — still has room inside the timeout that will kill
+it.
+
+The pairing is what matters: a member bounded by attempt count while the runner
+bounds it by wall clock has no budget at all, only a hope. When the attempts can
+outlast the timeout, the member is killed mid-retry and every path that runs
+*after* the retry loop becomes unreachable — most damagingly the fallback source
+written for exactly the failure that is occurring, which then never runs in the
+one condition it exists for. A ceiling is only real if it charges the next
+attempt's own timeout before deciding to make it; bounding when the last retry
+may *start* still lets that retry run past the deadline. Because the ceiling and
+the timeout are declared in different files, nothing but a check that reads both
+keeps them honest. See also: Section Worst Case, Graceful Skip, Bundle Wall
+Budget.
+
 ### Admission Headroom
 
 Slack reserved above a member's worst case to cover the work the runner itself
