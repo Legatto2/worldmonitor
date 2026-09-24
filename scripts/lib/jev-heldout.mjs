@@ -6,7 +6,10 @@
 // (transcript line 2085, 13:55Z), rule from line 3352. The held-out titles were judged
 // after that. No value in this block changes once a Jev answer on the held-out set
 // exists; tests/jev-heldout-freeze.test.mjs pins every one.
-import { buildJevRequest, hasNonLatinLetters } from '../../shared/jev-classify.js';
+import { readFileSync } from 'node:fs';
+import {
+  JEV_ENDPOINT, JEV_MODEL, buildJevRequest, hasNonLatinLetters, parseJevAnswers, sanitizeHeadline,
+} from '../../shared/jev-classify.js';
 import { isAlertLevel, promptSha, scoreAlertLabels } from './classify-eval.mjs';
 
 const noul = (instructions, t, f) => ({ type: 'noul', instructions, criteria: { true: t, false: f } });
@@ -106,4 +109,72 @@ export function scoreArms(rows, jevRuns, relayRuns) {
     [RELAY_ARM]: perRun(relayRuns, (labels) => labels),
     ...Object.fromEntries(ARMS.map((arm) => [arm.name, perRun(jevRuns, (answers) => armLabels(arm, answers))])),
   };
+}
+
+// The Nouls go in their own request, as they were measured; production's level request
+// is sent unchanged beside it.
+export const buildNoulRequest = (title, maxTextChars = 200) => ({
+  model: JEV_MODEL,
+  state: { headline: sanitizeHeadline(title, maxTextChars) },
+  questions: NOUL_QUESTIONS,
+});
+
+export function parseNoulAnswers(body) {
+  const noul = {};
+  for (const key of Object.keys(NOUL_QUESTIONS)) {
+    const p = body?.answers?.[key]?.noul;
+    if (typeof p !== 'number' || !Number.isFinite(p)) return null;
+    noul[key] = p;
+  }
+  return noul;
+}
+
+// The relay's per-attempt deadline (jev-classify-relay.cjs): a slower answer is no answer there.
+const JEV_TIMEOUT_MS = 5_000;
+const JEV_RETRY_STATUSES = new Set([429, 529]);
+
+async function postJev(request, { apiKey, fetchFn, usage, retryDelayMs }) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const resp = await fetchFn(JEV_ENDPOINT, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'User-Agent': 'WorldMonitor-Eval/1.0' },
+        body: JSON.stringify(request),
+        signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
+      });
+      if (resp.ok) {
+        const body = await resp.json();
+        usage.inputTokens += body?.usage?.input_tokens ?? 0;
+        return body;
+      }
+      resp.body?.cancel?.().catch(() => {});
+      if (!JEV_RETRY_STATUSES.has(resp.status) && resp.status < 500) break;
+    } catch { /* timeout or network error: retry */ }
+    await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)));
+  }
+  usage.failedRequests += 1;
+  return null;
+}
+
+// JevAnswer for one title, or null when either request has no valid answer.
+export async function askJev(title, { apiKey, fetchFn = (...args) => globalThis.fetch(...args), usage, retryDelayMs = 1000 }) {
+  const transport = { apiKey, fetchFn, usage, retryDelayMs };
+  const [level] = parseJevAnswers(await postJev(buildJevRequest([title], { levelOnly: true }), transport), 1, { levelOnly: true });
+  if (!level) return null;
+  const noul = parseNoulAnswers(await postJev(buildNoulRequest(title), transport));
+  return noul && { l: level.l, levelConf: level.levelConf, pAlert: level.pAlert, noul };
+}
+
+// A capture is trusted only for the frozen questions, the pinned model and exactly the
+// held-out Latin titles in fixture order.
+export function readCapture(file, rows) {
+  const capture = JSON.parse(readFileSync(file, 'utf8'));
+  if (capture.questionSetSha !== QUESTION_SET_SHA) throw new Error(`${file}: questionSetSha ${capture.questionSetSha} is not the frozen ${QUESTION_SET_SHA}`);
+  if (capture.model !== JEV_MODEL) throw new Error(`${file}: model ${capture.model} is not ${JEV_MODEL}`);
+  const titles = latinRows(rows).map((r) => r.title);
+  if (JSON.stringify(capture.titles) !== JSON.stringify(titles)) throw new Error(`${file}: titles are not the held-out Latin titles in order`);
+  for (const [name, run] of Object.entries(capture.runs ?? {})) {
+    if (run.answers?.length !== titles.length) throw new Error(`${file}: runs["${name}"] has ${run.answers?.length} answers for ${titles.length} titles`);
+  }
+  return capture;
 }
