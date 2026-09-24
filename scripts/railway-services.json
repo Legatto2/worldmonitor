@@ -1597,7 +1597,6 @@
   {
     "entry": "scripts/seed-live-video-resolved.mjs",
     "deployMode": "nixpacks-root-scripts",
-    "lifecycle": "planned",
     "service": "seed-live-video-resolved",
     "startCommand": "node seed-live-video-resolved.mjs",
     "requiredEnv": [
