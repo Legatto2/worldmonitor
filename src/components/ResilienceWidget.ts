@@ -1,3 +1,4 @@
+import { IS_LOCAL_WORKSPACE } from '@/config/local-workspace';
 import { type AuthSession, getAuthState, subscribeAuthState } from '@/services/auth-state';
 import {
   getEntitlementVerificationStatus,
@@ -292,7 +293,7 @@ export class ResilienceWidget {
   }
 
   private renderLocked(gateReason: PanelGateReason): HTMLElement {
-    const description = gateReason === PanelGateReason.ANONYMOUS
+    const description = IS_LOCAL_WORKSPACE ? 'Resilience data service is not configured locally.' : gateReason === PanelGateReason.ANONYMOUS
       ? 'Sign in to unlock premium resilience scores.'
       : 'Upgrade to Pro to unlock resilience scores.';
     const cta = gateReason === PanelGateReason.ANONYMOUS ? 'Sign In' : 'Upgrade to Pro';

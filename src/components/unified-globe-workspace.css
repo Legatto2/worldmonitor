@@ -17,3 +17,12 @@
 .unified-globe-viewport { min-width:0;min-height:0; }
 .unified-globe-viewport iframe { width:100%;height:100%;border:0;display:block; }
 @media(max-width:760px) { .unified-workspace-body {grid-template-columns:1fr;grid-template-rows:160px minmax(0,1fr);} .unified-workspace-body aside {border-right:0;border-bottom:1px solid #28404f;} .unified-context-list {display:none;} #unified-globe-workspace>header {padding:8px;gap:5px;} #unified-globe-workspace>header strong {width:100%;font-size:12px;} #unified-globe-workspace>header button {font-size:11px;} }
+
+/* Local presentation does not change hosted-service authorization. */
+.local-workspace .pro-banner-slot,.local-workspace .pro-banner,.local-workspace .mobile-menu-account,.local-workspace .auth-header-widget,.local-workspace .widget-pro-block,.local-workspace .upgrade-pro-cta,.local-workspace .panel-locked-cta,.local-workspace .auth-signin-btn,.local-workspace .auth-signup-link {display:none!important;}
+
+.local-workspace .ai-widget-block-pro,.local-workspace .mcp-panel-block {display:none!important;}
+
+.local-workspace a[href^="/pro"],.local-workspace a[href="https://www.worldmonitor.app/pro"],.local-workspace .pro-preview-section {display:none!important;}
+
+.local-workspace .pro-preview,.local-workspace .widget-pro-badge,.local-workspace .panel-pro-badge {display:none!important;}

@@ -21,14 +21,16 @@ export function initShodanPanel({ viewer }) {
     <header><h2>SHODAN</h2><button type="button" aria-label="Close Shodan">×</button></header>
     <nav class="shodan-actions" aria-label="Shodan views"><button type="button" data-view="shodan" aria-pressed="true">Shodan results</button><button type="button" data-view="cameras" aria-pressed="false">Public cameras</button></nav>
     <div data-shodan-view>
-    <p>Internet exposure observations</p>
+    <p>Internet exposure observations</p><button type="button" data-account>Account &amp; credits</button><p data-account-status role="note"></p>
     <form>
-      <label>Lookup type<select name="mode"><option value="host">IP address</option><option value="search">Search Shodan</option></select></label>
+      <label>Lookup type<select name="mode"><option value="host">IP address</option><option value="search">Search Shodan</option><option value="count">Count &amp; summarize</option></select></label>
       <label>IP address or search query<input name="query" type="text" placeholder="8.8.8.8" maxlength="300" required autocomplete="off" spellcheck="false"></label>
-      <p class="shodan-note">Searches may use Shodan credits. Up to 100 service observations per search; no automatic refresh.</p>
+      <label>Result page<input name="page" type="number" min="1" max="100" value="1"></label>
+      <label><input name="history" type="checkbox"> Include host history (up to 100 service records)</label>
+      <p class="shodan-note">Search pages may use credits. Count &amp; summarize does not use query credits. Requests are manual; up to 100 observations per page.</p>
       <button type="submit">Look up</button>
     </form>
-    <div class="shodan-actions"><label><input type="checkbox" checked> Show map markers</label><button type="button" data-clear>Clear results</button></div>
+    <div class="shodan-actions"><label><input type="checkbox" data-markers checked> Show map markers</label><button type="button" data-clear>Clear results</button><button type="button" data-export disabled>Export JSON</button></div>
     <p class="shodan-note">IP locations are approximate. An exposed service is not evidence of malicious activity. Observations may be outdated.</p>
     <p role="status" aria-live="polite"></p><div class="shodan-results"></div></div>
     <div data-camera-view hidden></div>`;
@@ -38,6 +40,7 @@ export function initShodanPanel({ viewer }) {
   const status = panel.querySelector('[role="status"]');
   const results = panel.querySelector('.shodan-results');
   const submit = form.querySelector('[type="submit"]');
+  let lastPayload = null;
   let disposed = false;
   let requestVersion = 0;
   let entities = new Map();
@@ -48,6 +51,7 @@ export function initShodanPanel({ viewer }) {
     onReveal: () => {
       panel.hidden = false;
       button.setAttribute('aria-expanded', 'true');
+      switchView('cameras');
     },
   });
   const switchView = (view) => {
@@ -92,12 +96,14 @@ export function initShodanPanel({ viewer }) {
     }
   });
   form.elements.mode.addEventListener('change', () => {
-    const search = form.elements.mode.value === 'search';
+    const search = form.elements.mode.value !== 'host';
+    form.elements.page.disabled = form.elements.mode.value !== 'search';
+    form.elements.history.disabled = search;
     input.placeholder = search ? 'org:"Google" country:US' : '8.8.8.8';
-    submit.textContent = search ? 'Search (may use credits)' : 'Look up';
+    submit.textContent = form.elements.mode.value === 'count' ? 'Count & summarize' : search ? 'Search (may use credits)' : 'Look up';
   });
   panel
-    .querySelector('[type="checkbox"]')
+    .querySelector('[data-markers]')
     .addEventListener('change', (event) => {
       source.show = event.target.checked;
       viewer.scene.requestRender();
@@ -107,6 +113,8 @@ export function initShodanPanel({ viewer }) {
     source.entities.removeAll();
     entities.clear();
     results.replaceChildren();
+    lastPayload = null;
+    panel.querySelector('[data-export]').disabled = true;
     viewer.scene.requestRender();
   };
   panel.querySelector('[data-clear]').addEventListener('click', () => {
@@ -117,6 +125,8 @@ export function initShodanPanel({ viewer }) {
   });
   function render(payload) {
     clear();
+    lastPayload = payload;
+    panel.querySelector('[data-export]').disabled = false;
     let mapped = 0;
     for (const [index, host] of payload.hosts.entries()) {
       const card = document.createElement('article');
@@ -129,8 +139,13 @@ export function initShodanPanel({ viewer }) {
       record.target = '_blank';
       record.rel = 'noopener noreferrer';
       card.append(record);
+      const detail=document.createElement('button');detail.type='button';detail.textContent='Load host details';
+      detail.addEventListener('click',()=>{form.elements.mode.value='host';form.elements.mode.dispatchEvent(new Event('change'));input.value=host.ip;form.elements.page.value='1';form.requestSubmit();});card.append(detail);
       const lines = [
         host.organization || 'Organization unknown',
+        `Network: ${[host.asn,host.isp,host.os].filter(Boolean).join(' · ') || 'Unknown'}`,
+        `Domains: ${(host.domains || []).join(', ') || 'Unknown'}`,
+        `Tags: ${(host.tags || []).join(', ') || 'None'}`,
         [host.city, host.country].filter(Boolean).join(', ') ||
           'Location unknown',
         `Ports: ${host.ports.join(', ') || 'Unknown'}`,
@@ -146,6 +161,9 @@ export function initShodanPanel({ viewer }) {
         const p = document.createElement('p');
         p.textContent = `${service.port ?? '?'} / ${service.transport || '?'} · ${[service.product, service.version].filter(Boolean).join(' ') || 'Service unidentified'}${service.observedAt ? ` · ${service.observedAt}` : ''}`;
         card.append(p);
+        if (service.httpTitle) { const title=document.createElement('p');title.textContent='HTTP title: '+service.httpTitle;card.append(title); }
+        if (service.tls) { const tls=document.createElement('p');tls.textContent='TLS: '+[service.tls.subject,service.tls.issuer,service.tls.expires].filter(Boolean).join(' · ');card.append(tls); }
+        if (service.vulnerabilities?.length) { const vulns=document.createElement('p');vulns.textContent='Indexed CVEs (not independently verified): '+service.vulnerabilities.join(', ');card.append(vulns); }
       }
       if (host.latitude !== null && host.longitude !== null) {
         const entity = source.entities.add({
@@ -168,7 +186,7 @@ export function initShodanPanel({ viewer }) {
         locate.textContent = 'Locate approximate position';
         locate.addEventListener('click', () => {
           source.show = true;
-          panel.querySelector('[type="checkbox"]').checked = true;
+          panel.querySelector('[data-markers]').checked = true;
           viewer.camera.flyTo({
             destination: Cartesian3.fromDegrees(
               host.longitude,
@@ -191,8 +209,12 @@ export function initShodanPanel({ viewer }) {
       results.append(card);
     }
     status.textContent = `${payload.hosts.length} observations shown of ${payload.total.toLocaleString()}; ${mapped} mapped. ${payload.cached ? 'Cached' : 'Retrieved'} ${payload.retrievedAt}.`;
-    if (!payload.hosts.length)
-      status.textContent = 'No matching observations found.';
+    for (const [name,items] of Object.entries(payload.facets || {})) {
+      if (!items.length) continue;
+      const group=document.createElement('article');const heading=document.createElement('h3');heading.textContent='Top '+name;group.append(heading);
+      for(const item of items){const row=document.createElement('p');row.textContent=item.value+': '+item.count.toLocaleString();group.append(row);}results.append(group);
+    }
+    if (!payload.hosts.length) status.textContent = payload.total ? payload.total.toLocaleString()+' matching observations. Summary only.' : 'No matching observations found.';
     viewer.scene.requestRender();
   }
   const removeSelection = viewer.selectedEntityChanged.addEventListener(
@@ -213,7 +235,7 @@ export function initShodanPanel({ viewer }) {
       const response = await fetch(`/api/shodan/${form.elements.mode.value}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: input.value.trim() }),
+        body: JSON.stringify({ query: input.value.trim(), page: Number(form.elements.page.value), history: form.elements.history.checked }),
         signal: abort.signal,
       });
       const payload = await response.json();
@@ -227,6 +249,17 @@ export function initShodanPanel({ viewer }) {
     } finally {
       if (!disposed && version === requestVersion) submit.disabled = false;
     }
+  });
+  form.elements.page.disabled = true;
+  panel.querySelector('[data-export]').addEventListener('click',()=>{
+    if (!lastPayload) return;
+    const url=URL.createObjectURL(new Blob([JSON.stringify(lastPayload,null,2)],{type:'application/json'}));
+    const link=document.createElement('a');link.href=url;link.download='shodan-observations.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  panel.querySelector('[data-account]').addEventListener('click',async()=>{
+    const target=panel.querySelector('[data-account-status]');target.textContent='Loading account…';
+    try {const response=await fetch('/api/shodan/account',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:abort.signal});const data=await response.json();if(disposed)return;if(!response.ok)throw Error(data.error || 'Account unavailable');target.textContent='Plan: '+data.plan+' · Query credits: '+(data.queryCredits ?? 'unknown')+' · Scan credits: '+(data.scanCredits ?? 'unknown')+' · Monitored IPs: '+(data.monitoredIPs ?? 'unknown');}
+    catch(error){if(!disposed)target.textContent=error.message;}
   });
   fetch('/api/shodan/status', { signal: abort.signal })
     .then((r) => r.json())

@@ -18,6 +18,9 @@ export function normalizeShodanHost(raw = {}) {
   return {
     ip: isIP(raw.ip_str || '') ? raw.ip_str : '',
     organization: text(raw.org),
+    asn: text(raw.asn), isp: text(raw.isp), os: text(raw.os),
+    domains: Array.isArray(raw.domains) ? raw.domains.slice(0,30).map(v=>text(v)) : [],
+    tags: Array.isArray(raw.tags) ? raw.tags.slice(0,30).map(v=>text(v)) : [],
     hostnames: Array.isArray(raw.hostnames)
       ? raw.hostnames.slice(0, 10).map((v) => text(v))
       : [],
@@ -39,6 +42,9 @@ export function normalizeShodanHost(raw = {}) {
         port: Number.isInteger(service.port) ? service.port : null,
         transport: text(service.transport, 10),
         product: text(service.product),
+        httpTitle: text(service.http?.title),
+        tls: service.ssl?.cert ? {subject:text(service.ssl.cert.subject?.CN),issuer:text(service.ssl.cert.issuer?.CN),expires:text(service.ssl.cert.expires),sha256:text(service.ssl.cert.fingerprint?.sha256)} : null,
+        vulnerabilities: Object.keys(service.vulns || {}).filter(v=>/^CVE-\d{4}-\d+$/.test(v)).slice(0,100),
         version: text(service.version, 80),
         observedAt: text(service.timestamp, 40),
       })),
@@ -89,7 +95,7 @@ export function createShodanMiddleware({
     }
     if (route === '/status' && req.method === 'GET')
       return send(res, 200, { configured: Boolean(key) });
-    if (!['/host', '/search'].includes(route))
+    if (!['/host', '/search', '/count', '/account'].includes(route))
       return send(res, 404, { error: 'Unknown Shodan route.' });
     if (req.method !== 'POST')
       return send(res, 405, { error: 'Use POST for Shodan lookups.' });
@@ -110,12 +116,12 @@ export function createShodanMiddleware({
       return send(res, 400, { error: 'Invalid JSON request.' });
     }
     const query = typeof input?.query === 'string' ? input.query.trim() : '';
-    if (
+    if (route !== '/account' && (
       !query ||
       query.length > 300 ||
       /[\x00-\x1f]/.test(query) ||
       (route === '/host' && !isIP(query))
-    ) {
+    )) {
       return send(res, 400, {
         error:
           route === '/host'
@@ -123,7 +129,11 @@ export function createShodanMiddleware({
             : 'Enter a search query of 1–300 characters.',
       });
     }
-    const id = `${route}:${query}`;
+    const page = input.page ?? 1;
+    if (!Number.isInteger(page) || page < 1 || page > 100) return send(res,400,{error:'Page must be an integer from 1 to 100.'});
+    if (input.history !== undefined && typeof input.history !== 'boolean') return send(res,400,{error:'History must be a boolean.'});
+    const history = input.history === true;
+    const id = JSON.stringify([route,query,page,history]);
     const stored = cache.get(id);
     if (stored && now() - stored.time < TTL)
       return send(res, 200, { ...stored.payload, cached: true });
@@ -145,14 +155,16 @@ export function createShodanMiddleware({
           const url = new URL(
             route === '/host'
               ? `/shodan/host/${encodeURIComponent(query)}`
-              : '/shodan/host/search',
+              : route === '/account' ? '/api-info' : route === '/count' ? '/shodan/host/count' : '/shodan/host/search',
             'https://api.shodan.io',
           );
           url.searchParams.set('key', key);
           url.searchParams.set('minify', route === '/host' ? 'false' : 'true');
-          if (route === '/search') {
+          if (route === '/host') url.searchParams.set('history',String(history));
+          if (route === '/search' || route === '/count') {
             url.searchParams.set('query', query);
-            url.searchParams.set('page', '1');
+            url.searchParams.set('page', String(page));
+            url.searchParams.set('facets','country:10,org:10,port:10,product:10');
           }
           const timeout = AbortSignal.timeout(15_000);
           const response = await fetchImpl(url, {
@@ -182,6 +194,15 @@ export function createShodanMiddleware({
           const raw = JSON.parse(
             await readResponseTextCapped(response, 4 * 1024 * 1024, timeout),
           );
+          if (route === '/account') return {
+            plan:text(raw.plan), queryCredits:Number.isFinite(raw.query_credits)?raw.query_credits:null,
+            scanCredits:Number.isFinite(raw.scan_credits)?raw.scan_credits:null,
+            monitoredIPs:Number.isFinite(raw.monitored_ips)?raw.monitored_ips:null,
+            unlocked:raw.unlocked === true, retrievedAt:new Date(now()).toISOString(),
+          };
+          const facets = Object.fromEntries(['country','org','port','product'].map(name=>[name,
+            Array.isArray(raw.facets?.[name]) ? raw.facets[name].slice(0,10).map(item=>({value:text(String(item.value),120),count:Number.isFinite(item.count)?item.count:0})) : []
+          ]));
           const hosts = (
             route === '/host'
               ? [raw]
@@ -192,7 +213,7 @@ export function createShodanMiddleware({
             .map(normalizeShodanHost)
             .filter((h) => h.ip);
           const payload = {
-            hosts,
+            hosts, facets, page, history,
             total:
               route === '/host'
                 ? hosts.length

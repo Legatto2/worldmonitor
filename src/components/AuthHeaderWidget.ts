@@ -1,3 +1,4 @@
+import { IS_LOCAL_WORKSPACE } from '@/config/local-workspace';
 import { subscribeAuthState, type AuthSession } from '@/services/auth-state';
 import { mountUserButton, openSignIn, openSignUp } from '@/services/clerk';
 import { t } from '@/services/i18n';
@@ -21,6 +22,7 @@ export class AuthHeaderWidget {
     this.onBillingClick = onBillingClick;
     this.container = document.createElement('div');
     this.container.className = 'auth-header-widget';
+    if (IS_LOCAL_WORKSPACE) { this.container.hidden = true; return; }
 
     this.unsubscribeAuth = subscribeAuthState((state: AuthSession) => {
       if (state.isPending) {

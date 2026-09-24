@@ -15,9 +15,10 @@ async function call(
     remote = '127.0.0.1',
     origin = 'http://localhost:4173',
     extraHeaders = {},
+    options = {},
   } = {},
 ) {
-  const req = Readable.from([JSON.stringify({ query })]);
+  const req = Readable.from([JSON.stringify({ query, ...options })]);
   req.url = route;
   req.method = method;
   req.socket = { remoteAddress: remote };
@@ -164,3 +165,14 @@ test('Shodan invalidates cached results after a key change and enforces the hour
   assert.equal((await call(middleware, { query: '1.1.1.1' })).code, 429);
   assert.equal(calls, 30);
 });
+
+ test('Shodan forwards explicit pages and history and bounds them', async()=>{
+  let captured;const middleware=createShodanMiddleware({env:{SHODAN_API_KEY:'test-key'},fetchImpl:async url=>{captured=url;return new Response(JSON.stringify({matches:[fixture],total:200,facets:{org:[{value:'Google',count:200}]}}));}});
+  const result=await call(middleware,{route:'/search',options:{page:2}});assert.equal(result.code,200);assert.equal(captured.searchParams.get('page'),'2');assert.equal(result.body.facets.org[0].count,200);
+  for(const page of [0,101,1.5,'2'])assert.equal((await call(middleware,{route:'/search',options:{page}})).code,400);
+ });
+ test('account response excludes credentials and count uses the free-count endpoint',async()=>{
+  let clock=0;let captured;const middleware=createShodanMiddleware({env:{SHODAN_API_KEY:'test-key'},now:()=>clock,fetchImpl:async url=>{captured=url;return new Response(JSON.stringify({plan:'dev',query_credits:50,scan_credits:0,key:'test-key',total:42}));}});
+  const account=await call(middleware,{route:'/account',query:''});assert.equal(account.code,200);assert.equal(account.body.queryCredits,50);assert.equal(JSON.stringify(account.body).includes('test-key'),false);assert.equal(captured.pathname,'/api-info');
+  clock=3000;const count=await call(middleware,{route:'/count',query:'org:Google'});assert.equal(count.body.total,42);assert.equal(captured.pathname,'/shodan/host/count');
+ });

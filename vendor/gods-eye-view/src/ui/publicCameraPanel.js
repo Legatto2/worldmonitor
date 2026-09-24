@@ -61,7 +61,7 @@ export function createPublicCameraPanel({ root, viewer, onReveal }) {
   }
   function setActive(value) {
     active = value;
-    source.show = value;
+    source.show = catalog.length > 0;
     if (!value) stop();
     viewer.scene.requestRender();
     if (value && !catalog.length) void load();
@@ -149,6 +149,7 @@ export function createPublicCameraPanel({ root, viewer, onReveal }) {
     source.entities.removeAll();
     pins.clear();
     list.replaceChildren();
+    source.show = catalog.length > 0;
     const matches = filterPublicCameras(catalog, input.value, near);
     nearLabel.textContent = near
       ? 'Within 100 km of the approximate Shodan position. These are separate public cameras, not the Shodan device.'
@@ -237,7 +238,7 @@ export function createPublicCameraPanel({ root, viewer, onReveal }) {
   const removeSelection = viewer.selectedEntityChanged.addEventListener(
     (entity) => {
       const camera = pins.get(entity);
-      if (camera && active) watch(camera);
+      if (camera) { onReveal(); setActive(true); watch(camera, false); }
     },
   );
   return {

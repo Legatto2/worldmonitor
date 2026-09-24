@@ -38,3 +38,11 @@ Preserve both source notices. Third-party maps, imagery and datasets retain thei
 ## Verification
 
 Run `npm run typecheck`, `npm run lint:boundaries`, and `node --test tests/unified-bridge.test.mjs tests/unified-earthquakes.test.mjs`. Build dashboard with `VITE_UNIFIED_GLOBE_ORIGIN=http://localhost:4481` and `vite build --config vite.unified.config.ts`; build the vendor with `GEV_PARENT_ORIGIN=http://localhost:4480` and its normal build command. Both origins must match the serving arrangement. The development launcher is the supported local entry point.
+
+## Local UI and expanded Shodan tools
+
+Local mode suppresses account controls, Pro banners, pricing links and upgrade calls to action. Hosted-only services remain unavailable until configured; no hosted entitlement is bypassed.
+
+Shodan now offers account/credit status, explicit result pages 1–100, count/facet summaries, host history (bounded to 100 service observations), ASN/ISP/OS/domains/tags, HTTP titles, TLS identity/expiry, indexed CVE IDs, host-detail drill-down and JSON export. Each request remains manual, same-origin and server-side; the existing 30/hour local budget and Shodan plan limits apply. Count summaries use Shodan's documented query-credit-free count endpoint. See https://developer.shodan.io/api.
+
+After loading the public camera catalog, camera markers remain on the globe when the panel closes. Clicking a marker reopens the viewer and starts its operator snapshot refresh. Closing the viewer stops refresh requests. This is a periodically refreshed image, not a continuous video stream. Shodan marker clicks show host details; no indexed service is automatically treated as a playable camera stream.
