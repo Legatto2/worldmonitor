@@ -7361,7 +7361,6 @@ components:
                     type: string
                 url:
                     type: string
-            description: BriefEvidence is a data point a brief cites as [E1].
         GetCountryCoverageRequest:
             type: object
             properties:

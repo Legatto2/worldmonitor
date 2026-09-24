@@ -30,7 +30,6 @@ message BriefSource {
   string published_at = 4;
 }
 
-// BriefEvidence is a data point a brief cites as [E1].
 message BriefEvidence {
   string id = 1;
   string kind = 2;
