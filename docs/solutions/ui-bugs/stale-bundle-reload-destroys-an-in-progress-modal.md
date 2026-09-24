@@ -107,7 +107,7 @@ querySelectorAll: (sel: string) => {
 },
 ```
 
-**`checkVisibility()` with default options does not check opacity.** Per spec, `checkOpacity` and `checkVisibilityCSS` both default to false, so only `display: none` reads as hidden. Anything matching `OPEN_MODAL_SELECTOR` that hides via `opacity: 0` or `visibility: hidden` reports visible and would suppress both auto-reload paths for the whole session. The invariant that persistent overlays hide with `display: none` is stated only in prose in `src/utils/open-modal.ts`; an audit of first-party matches found no violation, and new overlays must keep it.
+**`checkVisibility()` with default options does not check opacity.** Per spec, `checkOpacity` and `checkVisibilityCSS` both default to false. The default check still returns false when the candidate has no associated box or an ancestor has `content-visibility: hidden`; `display: none` is not the only hidden case. Anything matching `OPEN_MODAL_SELECTOR` that hides only via `opacity: 0` or `visibility: hidden` reports visible and would suppress both auto-reload paths for the whole session. The invariant that persistent overlays hide with `display: none` is stated only in prose in `src/utils/open-modal.ts`; an audit of first-party matches found no violation, and new overlays must keep it.
 
 **`role="dialog"` is broader than "a modal holding user state".** The mission-preset popover at `src/app/event-handlers.ts` carries that role and will defer a reload while open. It dismisses on any outside click, and the service-worker updater has carried the identical exposure since PR #3184, so this is accepted rather than fixed.
 
