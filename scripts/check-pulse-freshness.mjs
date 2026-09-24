@@ -38,6 +38,7 @@ import {
   livePulseSnapshotAgeDays,
 } from './build-crawlable-corpus.mjs';
 import { isMainModule } from './lib/main-module.mjs';
+import { corroborateRunListings, reduceRunListings } from './lib/gh-run-listing.mjs';
 
 export const ISSUE_TITLE = 'Crawlable pulse refresh: snapshot is going stale';
 export const SNAPSHOT_DIR = 'docs/snapshots';
@@ -172,7 +173,7 @@ function statusLines({ snapshot, lastRun }) {
       ? `Newest snapshot: \`${snapshot.filename}\` captured ${snapshot.capturedAt}, `
         + `${Math.floor(snapshot.ageDays)} day(s) old.`
       : `No snapshot found in \`${SNAPSHOT_DIR}\`.`,
-    lastRun?.conclusion
+    lastRun?.unknown ? 'Last refresh run: UNKNOWN (listing could not be corroborated).' : lastRun?.conclusion
       ? `Last refresh run: \`${lastRun.conclusion}\`${lastRun.url ? ` — [run](${lastRun.url})` : ''}`
         + `${lastRun.superseded ? ', superseded by the newer snapshot above' : ''}.`
       : 'Last refresh run: none found.',
@@ -221,6 +222,11 @@ export function publishPulseFreshness(verdict, {
   gh = ghJson,
   ghPost = ghWrite,
 } = {}) {
+  if (!verdict.alert && verdict.lastRun?.unknown) {
+    const message = 'UNKNOWN: pulse refresh run listing could not be corroborated; existing issue left unchanged.';
+    if (summaryPath) appendFileSync(summaryPath, `${message}\n`);
+    return { alert: false, state: 'UNKNOWN', action: 'unchanged' };
+  }
   const body = renderBody(verdict, { runUrl });
   if (summaryPath) appendFileSync(summaryPath, `${body}\n`);
   if (!repository) {
@@ -252,13 +258,22 @@ export function publishPulseFreshness(verdict, {
   return { alert: true, reasons: verdict.reasons.length, action: existing ? 'updated' : 'created' };
 }
 
-export function readLastRefreshRun({ repository = process.env.GITHUB_REPOSITORY, gh = ghJson } = {}) {
+export function readLastRefreshRun({ repository = process.env.GITHUB_REPOSITORY, gh = ghJson, clock = Date.now, sampleBudgetMs = 90_000 } = {}) {
   if (!repository) return null;
-  const payload = gh([
-    'api',
-    `repos/${repository}/actions/workflows/${REFRESH_WORKFLOW}/runs?per_page=1&status=completed`,
-  ]);
-  const run = payload?.workflow_runs?.[0];
+  const listings = corroborateRunListings({
+    workflowFile: REFRESH_WORKFLOW, clock, sampleBudgetMs,
+    read: () => {
+      const payload = gh([
+        'api',
+        `repos/${repository}/actions/workflows/${REFRESH_WORKFLOW}/runs?per_page=1&status=completed`,
+      ]);
+      if (!Array.isArray(payload?.workflow_runs) || payload.workflow_runs.some(run => !run?.id || !Number.isFinite(Date.parse(run.created_at)))) {
+        throw new Error('refresh run listing has unreadable workflow runs');
+      }
+      return { runs: payload.workflow_runs, totalCount: payload.total_count };
+    },
+  });
+  const run = reduceRunListings(listings)[0];
   if (!run) return null;
   return { conclusion: run.conclusion ?? null, url: run.html_url ?? '', createdAt: run.created_at ?? '' };
 }
@@ -266,7 +281,13 @@ export function readLastRefreshRun({ repository = process.env.GITHUB_REPOSITORY,
 if (isMainModule(import.meta.url, process.argv[1])) {
   try {
     const snapshot = readNewestSnapshot(process.cwd());
-    const lastRun = readLastRefreshRun();
+    let lastRun;
+    try {
+      lastRun = readLastRefreshRun();
+    } catch {
+      console.log('::warning::UNKNOWN: pulse refresh run listing could not be corroborated.');
+      lastRun = { unknown: true };
+    }
     const verdict = evaluatePulseFreshness(snapshot, lastRun);
     const runUrl = process.env.GITHUB_RUN_ID
       ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`

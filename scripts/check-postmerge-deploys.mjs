@@ -37,6 +37,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { corroborateRunListings, supersedesRun as supersedes } from './lib/gh-run-listing.mjs';
 
 import { isMainModule } from './lib/main-module.mjs';
 import { REPOSITORY, readArgument } from './railway-cli.mjs';
@@ -403,44 +404,6 @@ function readRunListingOnce({ gh, repository, workflowFile }) {
 }
 
 /**
- * Does `candidate` describe a later state of this workflow than `incumbent`?
- *
- * `created_at` alone is NOT a total order over sampled records, and the gap is
- * the dangerous kind. A re-run keeps the run id AND the original `created_at`
- * and only bumps `run_attempt` — which is precisely why `readRunJobs` is
- * attempts-scoped. Reducing on a bare `created_at > created_at` therefore lets
- * the FIRST sample win every tie, so a sample holding attempt 1 (success)
- * outranks a later sample holding attempt 2 (failure), and the monitor then
- * reads attempt 1's green jobs and reports DEPLOYED for a deploy that failed.
- * The same tie decides a run that merely advanced (queued -> failure) between
- * two samples, which needs no re-run at all.
- *
- * So the order falls through: creation time, then run id (ids are monotonic,
- * which settles two DIFFERENT runs created in the same second), then attempt,
- * then a settled record over a still-active one (a run only ever moves active
- * -> completed within an attempt). Ties beyond that are the same observation.
- */
-function supersedes(candidate, incumbent) {
-  const candidateMs = parseTimestamp(candidate?.created_at);
-  const incumbentMs = parseTimestamp(incumbent?.created_at);
-  if (candidateMs !== incumbentMs) return candidateMs > incumbentMs;
-
-  if (candidate?.id !== incumbent?.id) {
-    return Number(candidate?.id ?? 0) > Number(incumbent?.id ?? 0);
-  }
-
-  const candidateAttempt = Number(candidate?.run_attempt ?? 1);
-  const incumbentAttempt = Number(incumbent?.run_attempt ?? 1);
-  if (candidateAttempt !== incumbentAttempt) return candidateAttempt > incumbentAttempt;
-
-  const candidateActive = ACTIVE_RUN_STATUSES.has(candidate?.status);
-  const incumbentActive = ACTIVE_RUN_STATUSES.has(incumbent?.status);
-  if (candidateActive !== incumbentActive) return incumbentActive;
-
-  return false;
-}
-
-/**
  * Resolve the newest run of one workflow on main, including queued or active
  * work, or a structured verdict when there is none.
  *
@@ -497,80 +460,10 @@ export function readNewestRun({
   sampleBudgetMs = RUN_LISTING_SAMPLE_BUDGET_MS,
   clock = () => Date.now(),
 }) {
-  const startedAt = clock();
-  const answered = [];
-  let failure = null;
-  for (let sample = 0; sample < samples; sample += 1) {
-    try {
-      answered.push(readRunListingOnce({ gh, repository, workflowFile }));
-    } catch (error) {
-      // A sample that answered is a real observation; a sibling that failed
-      // must not invalidate it. Only a listing NOTHING could read is a read
-      // failure, and that is rethrown below exactly as it was before sampling.
-      failure ??= error;
-    }
-    // Checked BETWEEN samples so a read in flight is never truncated, and
-    // deliberately NOT conditional on having an answer: the expensive case is
-    // a slow-but-ANSWERING 5xx, which is the retryable path, so the samples
-    // that cost the most are exactly the ones that return nothing. Three
-    // workflows of those would outrun the job's own `timeout-minutes: 10`, and
-    // a killed job is a red monitor — the false alarm this exists to stop.
-    // Running out of budget with nothing in hand falls through to the throw
-    // below, which is UNKNOWN, not an alarm.
-    if (clock() - startedAt >= sampleBudgetMs) break;
-  }
-  if (answered.length === 0) {
-    throw failure ?? new Error(`the run listing for ${workflowFile} produced no samples`);
-  }
-
-  // Layer 1: drop the samples a sibling PROVES are an older view. This does
-  // not change which run wins — an older view's newest run loses the ordering
-  // anyway — it changes who is allowed to VOTE. Without it a stale sample pads
-  // the quorum below, so an alarm that only one sample really saw reads as
-  // corroborated. Two sibling comparisons prove staleness:
-  //   - a narrower `total_count` (monotonic while runs are not being deleted);
-  //   - an empty listing while a sibling sample has runs (a run cannot
-  //     un-happen, so the empty view is the truncated one).
-  // A sample that omits `total_count` is kept: unprovable is not disproved.
-  const widestTotal = answered.reduce(
-    (widest, sample) => (
-      Number.isInteger(sample.totalCount) && (widest === null || sample.totalCount > widest)
-        ? sample.totalCount
-        : widest
-    ),
-    null,
-  );
-  const anySampleHasRuns = answered.some((sample) => sample.runs.length > 0);
-  const corroborating = answered.filter((sample) => {
-    if (widestTotal !== null && Number.isInteger(sample.totalCount) && sample.totalCount < widestTotal) {
-      return false;
-    }
-    // A listing that reports runs exist and then carries none contradicts
-    // itself, so it needs no sibling to convict it. Without this, three
-    // samples of the truncated shape agree with each other, clear the quorum,
-    // and produce NO_RUN — "this workflow has never run" asserted from three
-    // payloads each claiming thousands of runs exist. That is the loudest
-    // false alarm this file can raise, invented by the defence against it.
-    if (Number.isInteger(sample.totalCount) && sample.totalCount > 0 && sample.runs.length === 0) {
-      return false;
-    }
-    return !(anySampleHasRuns && sample.runs.length === 0);
+  const corroborating = corroborateRunListings({
+    read: () => readRunListingOnce({ gh, repository, workflowFile }),
+    samples, alarmQuorum, sampleBudgetMs, clock, workflowFile,
   });
-
-  // No verdict of ANY shape may rest on fewer than the quorum. Gating only the
-  // alarm-shaped ones was the asymmetry: a lone stale sample whose newest run
-  // still falls INSIDE the window resolves RUN_FOUND, checkPostmergeDeploys
-  // reads that run's jobs, and a superseded green attempt reports DEPLOYED.
-  // False green is the half of this failure nobody notices, so it earns the
-  // same corroboration as the half that pages.
-  if (corroborating.length < alarmQuorum) {
-    const error = markGithubReadFailure(new Error(
-      `the run listing for ${workflowFile} could not be corroborated: `
-      + `${corroborating.length} of ${samples} sample(s) agreed, ${alarmQuorum} required before this monitor will speak for it`,
-    ));
-    error.githubRecordUncorroborated = true;
-    throw error;
-  }
 
   // Layer 2: reduce the survivors on the total order.
   let newest = null;
