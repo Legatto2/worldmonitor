@@ -1,3 +1,4 @@
+import { IS_LOCAL_WORKSPACE } from '@/config/local-workspace';
 import { isDesktopRuntime } from '../services/runtime';
 import { invokeTauri } from '../services/tauri-bridge';
 import { t } from '../services/i18n';
@@ -1112,6 +1113,7 @@ export class Panel {
   }
 
   public showLocked(features: string[] = []): void {
+    if (IS_LOCAL_WORKSPACE) { this.showLocalUnavailable(); return; }
     this._locked = true;
     this.clearRetryCountdown();
     this._snapshotContentForRestore();
@@ -1209,6 +1211,7 @@ export class Panel {
   }
 
   public showGatedCta(reason: PanelGateReason, onAction: () => void): void {
+    if (IS_LOCAL_WORKSPACE && reason !== PanelGateReason.NONE) { this.showLocalUnavailable(); return; }
     const entry = Panel.gatedCtaEntry(reason);
     if (!entry) return; // PanelGateReason.NONE should never reach here
 
@@ -1241,6 +1244,14 @@ export class Panel {
     ctaBtn.addEventListener('click', onAction);
 
     this.replaceContent(h('div', { className: 'panel-locked-state' }, iconEl, descEl, ctaBtn));
+  }
+
+  private showLocalUnavailable(): void {
+    this._locked = true;
+    this.clearRetryCountdown();
+    this._snapshotContentForRestore();
+    this.element.classList.add('panel-is-locked');
+    this.replaceContent(h('div', { className: 'panel-locked-state' }, 'This hosted data service is not configured in the local workspace.'));
   }
 
   public unlockPanel(): void {

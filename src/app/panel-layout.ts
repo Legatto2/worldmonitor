@@ -1,3 +1,4 @@
+import { IS_LOCAL_WORKSPACE } from '@/config/local-workspace';
 import { clearTelegramIntelCache } from '@/services/telegram-intel';
 import { subscribeRuntimeConfig } from '@/services/runtime-config';
 import type { AppContext, AppModule } from '@/app/app-context';
@@ -1025,6 +1026,7 @@ export class PanelLayoutManager implements AppModule {
   }
 
   async renderLayout(): Promise<void> {
+    document.documentElement.classList.toggle('local-workspace', IS_LOCAL_WORKSPACE);
     const isGlobeMode = getStoredMapModePreference() === 'globe';
     // #5159: the collapsed-map cohort's #mapSection must be CREATED with
     // .collapsed — main.css sets the expanded mobile height with !important

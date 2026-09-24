@@ -1,3 +1,4 @@
+import { IS_LOCAL_WORKSPACE } from '@/config/local-workspace';
 import type { CountryBriefSignals } from '@/types';
 import {
   PERSPECTIVE_LABEL_CAVEAT,
@@ -1069,6 +1070,7 @@ export class CountryDeepDivePanel implements CountryBriefPanel {
   }
 
   private makeProLocked(text: string): HTMLElement {
+    if (IS_LOCAL_WORKSPACE) return this.el('div', 'cdp-pro-locked', 'This hosted data service is not configured locally.');
     const wrap = this.el('div', 'cdp-pro-locked');
     wrap.append(
       this.el('span', 'cdp-pro-lock-icon', '\uD83D\uDD12'),
