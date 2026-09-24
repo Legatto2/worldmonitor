@@ -1039,6 +1039,9 @@ const EXCLUDED_HOSTS = new Set([
   'protomaps.com',
   // Video-page URLs and embeds are presentation transport, not ingested
   // upstream datasets; keep them out of the provider count like native HLS.
+  // The channel /live page reader (scripts/lib/live-video-channel-live.mjs)
+  // stays in this class: it keeps only an 11-character embed id of a channel
+  // the catalog already plays, never page content.
   'www.youtube.com',
   // Release links, documentation links, and repository links are control/UI
   // surfaces; GitHub API and raw-content hosts remain tracked separately.

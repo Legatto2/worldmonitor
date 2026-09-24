@@ -14785,6 +14785,9 @@
           "path": "scripts/check-live-video-sources.mjs"
         },
         {
+          "path": "scripts/lib/live-video-channel-live.mjs"
+        },
+        {
           "path": "server/worldmonitor/aviation/v1/get-youtube-live-stream-info.ts"
         },
         {
