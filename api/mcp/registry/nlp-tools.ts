@@ -25,12 +25,16 @@ import { clusterNewsCore, protoThreatLevelToLabel, topClusterKeywords } from '..
 import type { NewsItemCore } from '../../../shared/news-clustering-core.js';
 import { getSourceProvenanceState } from '../../../shared/source-provenance.js';
 import { computeCredibilityScore } from '../../../shared/news-credibility.js';
-import { getSourceTier } from '../../../server/_shared/source-tiers';
+import { declaredSourceTier, getSourceTier } from '../../../server/_shared/source-tiers';
 import {
   CORROBORATION_OUTPUT_SCHEMA,
+  DECLARED_TIER_SCHEMA,
+  PUBLISHER_ROSTER_OUTPUT_PROPERTIES,
   assessCorroboration,
   evidenceFromCluster,
+  publisherRoster,
   toCorroborationJson,
+  toPublisherRosterJson,
 } from '../../../server/_shared/corroboration';
 import { buildAuthHeaders } from '../auth';
 import { fetchMcpDownstream } from '../downstream';
@@ -653,7 +657,7 @@ export const NLP_TOOLS: ToolDef[] = [
     // records plus a separate primary record. Keep the dispatcher budget
     // aligned with that supported maximum instead of rejecting valid output.
     _outputBudgetBytes: 262144,
-    description: 'Current topic clusters over the live headline digest, computed with the same Jaccard clustering the dashboard uses. Select the full digest (default) or tech digest with variant, then optionally restrict by category such as commodities, vcblogs, or accelerators. Each cluster reports its primary headline, member count, distinct sources with fail-closed provenance, top keywords, threat level, time span, credibilityScore (0-100 source reliability, distinct from importance), and corroboration; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. The result includes digestCoverage so agents can distinguish complete, partial, stale, and unavailable input. Deterministic — no LLM.',
+    description: 'Current topic clusters over the live headline digest, computed with the same Jaccard clustering the dashboard uses. Select the full digest (default) or tech digest with variant, then optionally restrict by category such as commodities, vcblogs, or accelerators. Each cluster reports its primary headline, member count, distinct sources with fail-closed provenance and declared tier, top keywords, threat level, time span, credibilityScore (0-100 source reliability, distinct from importance), corroboration, and the publishers roster with each publisher\'s declared tier; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. The result includes digestCoverage so agents can distinguish complete, partial, stale, and unavailable input. Deterministic — no LLM.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -681,7 +685,7 @@ export const NLP_TOOLS: ToolDef[] = [
           type: 'array',
           items: {
             type: 'object',
-            required: ['primarySourceProvenance', 'sourceProvenance', 'credibilityScore', 'corroboration'],
+            required: ['primarySourceProvenance', 'sourceProvenance', 'credibilityScore', 'corroboration', 'publishers', 'publishersUnlisted'],
             properties: {
               id: { type: 'string' },
               title: { type: 'string', description: 'Primary headline: the best-tier member, newest first among equals, as on the dashboard.' },
@@ -696,12 +700,13 @@ export const NLP_TOOLS: ToolDef[] = [
               sources: { type: 'array', items: { type: 'string' }, description: 'Distinct source names (up to 8).' },
               sourceProvenance: {
                 type: 'array',
-                description: 'Fail-closed provenance for each source returned in `sources`, including state affiliation when declared.',
+                description: 'Fail-closed provenance for each source returned in `sources`, including state affiliation and tier when declared.',
                 items: {
                   type: 'object',
-                  required: ['source', ...SOURCE_PROVENANCE_REQUIRED],
+                  required: ['source', 'tier', ...SOURCE_PROVENANCE_REQUIRED],
                   properties: {
                     source: { type: 'string' },
+                    tier: DECLARED_TIER_SCHEMA,
                     ...SOURCE_PROVENANCE_PROPERTIES,
                   },
                 },
@@ -715,6 +720,7 @@ export const NLP_TOOLS: ToolDef[] = [
                 description: '0-100 source-reliability score for the primary outlet, distinct from importance. Built from source tier, propaganda risk, and independent corroboration.',
               },
               corroboration: CORROBORATION_OUTPUT_SCHEMA,
+              ...PUBLISHER_ROSTER_OUTPUT_PROPERTIES,
             },
           },
         },
@@ -772,6 +778,7 @@ export const NLP_TOOLS: ToolDef[] = [
       const projected = selectedClusters.map(({ cluster, sources, distinctPublishers }) => {
         const projectedSources = sources.slice(0, 8);
         const digestCredibilityScore = cluster.credibilityScore;
+        const evidence = evidenceFromCluster(cluster);
         const provenanceBySource = new Map(
           [...new Set([cluster.primarySource, ...projectedSources])]
             .map(source => [source, getSourceProvenanceState(source)] as const),
@@ -791,6 +798,7 @@ export const NLP_TOOLS: ToolDef[] = [
           sources: projectedSources,
           sourceProvenance: projectedSources.map((source) => ({
             source,
+            tier: declaredSourceTier(source),
             ...provenanceBySource.get(source)!,
           })),
           topKeywords: topClusterKeywords(cluster, 5),
@@ -806,7 +814,8 @@ export const NLP_TOOLS: ToolDef[] = [
               propagandaRisk: provenanceBySource.get(cluster.primarySource)!.risk,
               independentCorroborationCount: distinctPublishers,
             }),
-          corroboration: toCorroborationJson(assessCorroboration(evidenceFromCluster(cluster))),
+          corroboration: toCorroborationJson(assessCorroboration(evidence)),
+          ...toPublisherRosterJson(publisherRoster(evidence)),
         };
       });
       return {

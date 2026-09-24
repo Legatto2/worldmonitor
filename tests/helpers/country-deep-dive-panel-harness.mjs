@@ -129,6 +129,9 @@ async function loadCountryDeepDivePanel(options = {}) {
       export function getSourceType(sourceName) {
         return sourceProvenance[sourceName]?.type ?? 'unknown';
       }
+      export function computeCredibilityScore() { return 50; }
+      export function resolveTelegramSourceName(value) { return value; }
+      export function resolveRegisteredTelegramSourceName(value) { return value; }
       export function getSourceTierBadgeTitle(sourceType) {
         if (sourceType === 'wire') return 'Wire Service - Highest reliability';
         if (sourceType === 'gov') return 'Official Government Source';

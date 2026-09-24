@@ -5,17 +5,17 @@ import { THREAT_PRIORITY } from '@/services/threat-classifier';
 import { formatTime, getCSSColor } from '@/utils';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
 import { computeNewSinceVisit } from '@/utils/new-since-visit';
-import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromItem } from '@/utils/corroboration-flag';
+import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromItem, publisherRoster } from '@/utils/corroboration-flag';
 import { analysisWorker, enrichWithVelocityML, getClusterAssetContext, MAX_DISTANCE_KM, activityTracker, generateSummary, translateText, preloadRelatedAssetTables } from '@/services';
 import { SITE_VARIANT } from '@/config';
 import { t, getCurrentLanguage, getCurrentLanguageTag } from '@/services/i18n';
 import { track } from '@/services/analytics';
 import { setTrustedHtml, trustedHtml } from '@/utils/dom-utils';
 import {
-  renderCorroboratingSourceRisk,
   renderCredibilityBadge,
   renderPrimarySourceProvenance,
 } from './news/source-provenance';
+import { describePublisherRoster, renderPublisherRosterHtml } from './news/publisher-roster';
 import {
   coverageBadgeString,
   type CoverageStringKey,
@@ -741,16 +741,9 @@ export class NewsPanel extends Panel {
       facts: primaryProvenanceFacts,
     } = renderPrimarySourceProvenance(cluster.primarySource);
 
-    // Build "Also reported by" section for multi-source confirmation
-    const otherSources = cluster.topSources.filter(s => s.name !== cluster.primarySource);
-    const topSourcesHtml = otherSources.length > 0
-      ? `<span class="also-reported">Also:</span>` + otherSources
-        .map(s => {
-          const propBadge = renderCorroboratingSourceRisk(s.name);
-          return `<span class="top-source tier-${s.tier}">${escapeHtml(s.name)}${propBadge}</span>`;
-        })
-        .join('')
-      : '';
+    const evidence = evidenceFromCluster(cluster);
+    const corroboration = assessCorroboration(evidence);
+    const rosterView = describePublisherRoster(corroboration, publisherRoster(evidence));
 
     const assetContext = getClusterAssetContext(cluster);
     if (assetContext && assetContext.assets.length > 0) {
@@ -819,7 +812,7 @@ export class NewsPanel extends Panel {
           ${langBadge}
           ${newTag}
           ${sourceBadge}
-          ${corroborationFlagHtml(assessCorroboration(evidenceFromCluster(cluster)))}
+          ${corroborationFlagHtml(corroboration)}
           ${velocityBadge}
           ${sentimentBadge}
           ${cluster.isAlert ? '<span class="alert-tag">ALERT</span>' : ''}
@@ -828,7 +821,7 @@ export class NewsPanel extends Panel {
         </div>
         <a class="item-title" href="${sanitizeUrl(cluster.primaryLink)}" target="_blank" rel="noopener">${escapeHtml(cluster.primaryTitle)}</a>
         <div class="cluster-meta">
-          <span class="top-sources">${topSourcesHtml}</span>
+          <div class="cluster-roster">${rosterView ? renderPublisherRosterHtml(rosterView) : ''}</div>
           <span class="item-time">${formatTime(cluster.lastUpdated)}</span>
           ${getCurrentLanguage() !== 'en' ? `<button class="item-translate-btn" title="Translate" data-text="${escapeHtml(cluster.primaryTitle)}">文</button>` : ''}
         </div>

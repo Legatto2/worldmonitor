@@ -2824,7 +2824,21 @@
       "singlePublisher": "单一发布者",
       "singlePublisherHint": "目前仅有一家媒体报道此事。这反映的是覆盖范围，而非准确性。",
       "tier4Only": "仅低级来源",
-      "tier4OnlyHint": "报道此事的所有媒体都是第4级来源（聚合器和博客）。这反映的是覆盖范围，而非准确性。"
+      "tier4OnlyHint": "报道此事的所有媒体都是第4级来源（聚合器和博客）。这反映的是覆盖范围，而非准确性。",
+      "rosterListed": "（已列出{{listed}}家）",
+      "rosterFeeds": "所见订阅源：{{labels}}",
+      "rosterLegend": "分级用于为来源排序，并不判断此说法的真伪。",
+      "tierDocsLink": "分级如何分配",
+      "tierChip": "T{{tier}}",
+      "tierChipUndeclared": "T?",
+      "tierTitle1": "一级：通讯社和官方机构",
+      "tierTitle2": "二级：主流媒体",
+      "tierTitle3": "三级：专业、地区和智库来源",
+      "tierTitle4": "四级：聚合器和博客",
+      "tierTitleUndeclared": "分级未声明：尚未审核",
+      "rosterSummary": "由{{publishers}}报道",
+      "rosterSummaryTier1": "由{{publishers}}报道，其中{{tier1}}家为一级来源",
+      "rosterPublishers_other": "{{count}}家媒体"
     }
   },
   "popups": {

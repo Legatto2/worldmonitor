@@ -42,11 +42,14 @@ async function renderRows(headlines, sourceProvenance) {
     for (let attempt = 0; attempt < 25 && harness.getWidgets().length === 0; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    return [...harness.getPanelRoot().querySelectorAll('.cdp-news-item')].map((row) => ({
-      meta: row.querySelector('.cdp-news-meta')?.textContent ?? '',
-      flag: row.querySelector('.corroboration-flag')?.textContent ?? null,
-      flagHint: row.querySelector('.corroboration-flag')?.getAttribute('title') ?? null,
-      tierBadge: row.querySelector('.cdp-tier-badge')?.textContent ?? null,
+    return [...harness.getPanelRoot().querySelectorAll('.cdp-news-entry')].map((entry) => ({
+      meta: entry.querySelector('.cdp-news-meta')?.textContent ?? '',
+      metaTitle: entry.querySelector('.cdp-news-meta')?.getAttribute('title') ?? null,
+      flag: entry.querySelector('.corroboration-flag')?.textContent ?? null,
+      flagHint: entry.querySelector('.corroboration-flag')?.getAttribute('title') ?? null,
+      tierBadge: entry.querySelector('.cdp-tier-badge')?.textContent ?? null,
+      roster: entry.querySelector('summary')?.textContent ?? null,
+      publishers: entry.querySelectorAll('.publisher-name').map((name) => name.textContent),
     }));
   } finally {
     harness.cleanup();
@@ -54,7 +57,7 @@ async function renderRows(headlines, sourceProvenance) {
 }
 
 describe('CountryDeepDivePanel corroboration (#6428, #6419)', () => {
-  it('counts publisher families, not feed labels, in "+N sources"', async () => {
+  it('lists publisher families, not feed labels, in the roster', async () => {
     const rows = await renderRows([
       headline('Border ceasefire talks resume in Geneva after strikes', 'Reuters World', '2026-09-20T12:00:00.000Z'),
       headline('Border ceasefire talks resume in Geneva after strikes', 'Reuters US', '2026-09-20T11:00:00.000Z'),
@@ -69,15 +72,20 @@ describe('CountryDeepDivePanel corroboration (#6428, #6419)', () => {
     });
 
     assert.equal(rows.length, 2);
-    const reutersOnly = rows.find((row) => !row.meta.includes('+') && row.flag !== null);
-    assert.ok(reutersOnly, `expected a one-publisher row without "+N", got ${JSON.stringify(rows)}`);
-    assert.doesNotMatch(reutersOnly.meta, /\+\d+ source/);
+    for (const row of rows) {
+      assert.match(row.meta, /^Reuters World •/, 'the meta line no longer carries "+N sources"');
+      assert.equal(row.metaTitle, null, 'the "Also reported by" tooltip is replaced by the roster');
+    }
+    const reutersOnly = rows.find((row) => row.flag !== null);
+    assert.ok(reutersOnly, `expected a one-publisher row, got ${JSON.stringify(rows)}`);
     assert.equal(reutersOnly.flag, 'components.corroboration.singlePublisher');
     assert.equal(reutersOnly.flagHint, 'components.corroboration.singlePublisherHint');
+    assert.equal(reutersOnly.roster, null, 'the pill already names the only publisher');
 
     const twoPublishers = rows.find((row) => row !== reutersOnly);
-    assert.match(twoPublishers.meta, /^Reuters World \+1 source •/);
     assert.equal(twoPublishers.flag, null);
+    assert.equal(twoPublishers.roster, 'components.corroboration.rosterSummaryTier1');
+    assert.deepEqual(twoPublishers.publishers, ['Reuters', 'BBC']);
   });
 
   it('takes the largest digest publisher count across the group, not only the primary', async () => {
@@ -90,7 +98,12 @@ describe('CountryDeepDivePanel corroboration (#6428, #6419)', () => {
     });
     assert.equal(rows.length, 1);
     assert.equal(rows[0].flag, null, 'a sibling seen by three publishers is not single-publisher');
-    assert.doesNotMatch(rows[0].meta, /\+\d+ source/, '"+N sources" counts only the publishers the row can list');
+    assert.deepEqual(rows[0].publishers, ['Reuters'], 'the roster lists only the publishers the row can see');
+    assert.equal(
+      rows[0].roster,
+      'components.corroboration.rosterSummaryTier1 components.corroboration.rosterListed',
+      'the digest count exceeds the listed publishers, so the summary says how many were listed',
+    );
   });
 
   it('renders the tier badge only for a declared tier', async () => {

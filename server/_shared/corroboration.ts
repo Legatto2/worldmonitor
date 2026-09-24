@@ -6,8 +6,13 @@
  * already holds, and never re-derives the rule. The verdict describes
  * coverage, not accuracy: it never says a claim is true or false.
  */
-import { countPublisherFamilies, publisherFamilyFor } from '../../shared/publisher-families.js';
-import { declaredSourceTier } from './source-tiers';
+import {
+  PUBLISHER_FAMILIES,
+  countPublisherFamilies,
+  publisherFamilyFor,
+  publisherNameForFamily,
+} from '../../shared/publisher-families.js';
+import { TIER_MEANING, declaredSourceTier, type DeclaredTier } from './source-tiers';
 
 /** What a caller holds about one claim. The variant says whether sibling members are visible. */
 export type ClaimEvidence =
@@ -30,6 +35,12 @@ function positiveCount(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 1 ? Math.floor(value) : null;
 }
 
+/** The labels every judgment about a claim reads. Blank labels name no publisher. */
+function claimLabels(evidence: ClaimEvidence): string[] {
+  return (evidence.kind === 'grouped' ? evidence.labels : [evidence.label])
+    .filter((label) => publisherFamilyFor(label) !== '');
+}
+
 /**
  * Rule, in order:
  *  - an item without a server count is unknown: one label says nothing about its siblings;
@@ -40,8 +51,7 @@ function positiveCount(value: number | null | undefined): number | null {
  *  - every seen label declared tier 4 is tier4-only; otherwise corroborated.
  */
 export function assessCorroboration(evidence: ClaimEvidence): Corroboration {
-  const labels = (evidence.kind === 'grouped' ? evidence.labels : [evidence.label])
-    .filter((label) => publisherFamilyFor(label) !== '');
+  const labels = claimLabels(evidence);
   const seen = countPublisherFamilies(labels);
   const reported = positiveCount(evidence.reportedPublishers);
   if (evidence.kind === 'item' && reported === null) return UNKNOWN;
@@ -54,6 +64,45 @@ export function assessCorroboration(evidence: ClaimEvidence): Corroboration {
   return labels.every((label) => declaredSourceTier(label) === 4)
     ? { state: 'tier4-only', publishers }
     : { state: 'corroborated', publishers };
+}
+
+/** One publisher family behind a claim, and the tier its seen labels declare. */
+export type Publisher = {
+  readonly family: string;
+  /** The curated publisher name, or the feed label itself when no family is curated. */
+  readonly name: string;
+  /** Best tier declared among this claim's labels in the family; null when none declares one. Never defaulted to 4. */
+  readonly tier: DeclaredTier | null;
+  /** Distinct labels seen, first-seen order: what the tier was read from. */
+  readonly labels: readonly string[];
+};
+
+/** Tier ascending, undeclared last, then name. */
+export type PublisherRoster = readonly Publisher[];
+
+const tierRank = (tier: DeclaredTier | null) => tier ?? 5;
+
+/**
+ * The publishers behind a claim, from the same labels assessCorroboration
+ * reads, so roster.length is the verdict's seen-family count by construction.
+ * A server count above it means publishers this caller cannot list.
+ */
+export function publisherRoster(evidence: ClaimEvidence): PublisherRoster {
+  const byFamily = new Map<string, { labels: string[]; tier: DeclaredTier | null }>();
+  for (const label of claimLabels(evidence)) {
+    const family = publisherFamilyFor(label);
+    const entry = byFamily.get(family) ?? { labels: [], tier: null };
+    if (!entry.labels.includes(label)) entry.labels.push(label);
+    const tier = declaredSourceTier(label);
+    if (tier !== null && (entry.tier === null || tier < entry.tier)) entry.tier = tier;
+    byFamily.set(family, entry);
+  }
+  return [...byFamily].map(([family, { labels, tier }]): Publisher => ({
+    family,
+    name: Object.prototype.hasOwnProperty.call(PUBLISHER_FAMILIES, family) ? publisherNameForFamily(family) : labels[0]!.trim(),
+    tier,
+    labels,
+  })).sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.name.localeCompare(b.name, 'en'));
 }
 
 export function evidenceFromCluster(cluster: {
@@ -109,5 +158,69 @@ export const CORROBORATION_OUTPUT_SCHEMA: Readonly<Record<string, unknown>> = Ob
       type: ['integer', 'null'],
       description: 'Distinct publisher families behind the claim; null when state is unknown.',
     },
+  },
+});
+
+/** Wire rosters list at most this many publishers, like the `sources` list beside them. */
+export const PUBLISHER_ROSTER_CAP = 8;
+
+/**
+ * Wire roster strings are capped so a full roster on every cluster fits the MCP
+ * output budget. The longest configured label or publisher name fits whole; a
+ * test holds the tables to it.
+ */
+export const PUBLISHER_ROSTER_STRING_MAX_BYTES = 40;
+
+function capUtf8(value: string, maxBytes: number): string {
+  let bytes = 0;
+  let end = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    const size = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    end += character.length;
+  }
+  return value.slice(0, end);
+}
+
+export type PublisherJson = { name: string; tier: DeclaredTier | null; labels: string[] };
+export type PublisherRosterJson = { publishers: PublisherJson[]; publishersUnlisted: number };
+
+export function toPublisherRosterJson(roster: PublisherRoster): PublisherRosterJson {
+  const cap = (value: string) => capUtf8(value, PUBLISHER_ROSTER_STRING_MAX_BYTES);
+  return {
+    publishers: roster.slice(0, PUBLISHER_ROSTER_CAP).map(({ name, tier, labels }) => ({ name: cap(name), tier, labels: labels.map(cap) })),
+    publishersUnlisted: Math.max(0, roster.length - PUBLISHER_ROSTER_CAP),
+  };
+}
+
+const TIER_LEGEND = ([1, 2, 3, 4] as const).map((tier) => `${tier} ${TIER_MEANING[tier]}`).join('; ');
+
+export const DECLARED_TIER_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
+  type: ['integer', 'null'],
+  enum: [1, 2, 3, 4, null],
+  description: `Tier declared for this source in WorldMonitor's source tables: ${TIER_LEGEND}. null means not declared, never tier 4. Tiers rank sources; they do not judge a claim.`,
+});
+
+/** Spread into every MCP tool row that emits a publisher roster. */
+export const PUBLISHER_ROSTER_OUTPUT_PROPERTIES: Readonly<Record<string, unknown>> = Object.freeze({
+  publishers: {
+    type: 'array',
+    description: `Distinct publisher families behind this claim, from the same source labels as corroboration: best declared tier first, undeclared last, then name. Up to ${PUBLISHER_ROSTER_CAP}.`,
+    items: {
+      type: 'object',
+      required: ['name', 'tier', 'labels'],
+      properties: {
+        name: { type: 'string', description: `Publisher name, or the feed label when no publisher family is curated. At most ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes.` },
+        tier: { ...DECLARED_TIER_SCHEMA, description: `Best tier declared among this claim's labels for the publisher: ${TIER_LEGEND}. null means none is declared, never tier 4. Tiers rank sources; they do not judge the claim.` },
+        labels: { type: 'array', items: { type: 'string' }, description: `Feed labels seen for this publisher, which the tier was read from. Each at most ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes; the sources list carries the full label.` },
+      },
+    },
+  },
+  publishersUnlisted: {
+    type: 'integer',
+    minimum: 0,
+    description: `Publishers beyond the first ${PUBLISHER_ROSTER_CAP} that publishers omits.`,
   },
 });

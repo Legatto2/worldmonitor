@@ -69,7 +69,7 @@ let renderer: {
     tierBadge: string;
     facts: string;
   };
-  renderCorroboratingSourceRisk: (sourceName: string) => string;
+  getCorroboratingSourceRiskBadge: (sourceName: string) => { className: string; title: string; label: string } | null;
   renderCredibilityBadge: (
     sourceName: string,
     item?: { credibilityScore?: number; corroborationCount?: number },
@@ -232,7 +232,7 @@ describe('source provenance defaults (#5390)', () => {
     assert.match(reviewedWire.tierBadge, /Wire Service - Highest reliability/);
     assert.match(reviewedWire.tierBadge, />★ Wire</);
 
-    assert.match(renderer.renderCorroboratingSourceRisk('Fars News'), />\?</);
+    assert.equal(renderer.getCorroboratingSourceRiskBadge('Fars News')?.label, '?');
   });
 
   it('renders existing badge CSS on Telegram channel labels (#6600)', () => {
@@ -259,7 +259,10 @@ describe('provenance facts beside the risk badge (#6419)', () => {
     const meduza = renderer.renderPrimarySourceProvenance('Meduza');
     assert.equal(meduza.riskBadge, '');
     assert.match(meduza.facts, /<span class="provenance-fact perspective" title="[^"]*not judged neutral[^"]*">Anti-Kremlin<\/span>/);
-    assert.match(renderer.renderCorroboratingSourceRisk('Meduza'), /class="provenance-fact-marker"[^>]*>◐</);
+    assert.deepEqual(
+      [renderer.getCorroboratingSourceRiskBadge('Meduza')?.className, renderer.getCorroboratingSourceRiskBadge('Meduza')?.label],
+      ['provenance-fact-marker', '◐'],
+    );
   });
 
   it('names the state on the risk badge even when a note fills the badge title', () => {
@@ -267,7 +270,10 @@ describe('provenance facts beside the risk badge (#6419)', () => {
     assert.match(voa.riskBadge, />! Caution: USA</);
     assert.match(voa.riskBadge, /title="Caution\. State-affiliated: USA\. Perspective: none recorded\. US government-funded\."/);
     assert.equal(voa.facts, '', 'the badge carries the state, so no duplicate chip');
-    assert.match(renderer.renderCorroboratingSourceRisk('Voice of America'), /title="Caution\. State-affiliated: USA\. Perspective: none recorded\. US government-funded\."/);
+    assert.equal(
+      renderer.getCorroboratingSourceRiskBadge('Voice of America')?.title,
+      'Caution. State-affiliated: USA. Perspective: none recorded. US government-funded.',
+    );
   });
 
   it('renders a state chip for an affiliated source rated low, which has no risk badge', () => {
@@ -278,7 +284,7 @@ describe('provenance facts beside the risk badge (#6419)', () => {
 
   it('renders no facts for a reviewed source with none recorded', () => {
     assert.equal(renderer.renderPrimarySourceProvenance('Reuters').facts, '');
-    assert.equal(renderer.renderCorroboratingSourceRisk('Reuters'), '');
+    assert.equal(renderer.getCorroboratingSourceRiskBadge('Reuters'), null);
   });
 });
 

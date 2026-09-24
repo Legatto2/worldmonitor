@@ -2824,7 +2824,21 @@
       "singlePublisher": "單一發布者",
       "singlePublisherHint": "目前僅有一家媒體報道此事。這反映的是覆蓋範圍，而非準確性。",
       "tier4Only": "僅低階來源",
-      "tier4OnlyHint": "報道此事的所有媒體都是第4級來源（聚合器和部落格）。這反映的是覆蓋範圍，而非準確性。"
+      "tier4OnlyHint": "報道此事的所有媒體都是第4級來源（聚合器和部落格）。這反映的是覆蓋範圍，而非準確性。",
+      "rosterListed": "（已列出{{listed}}家）",
+      "rosterFeeds": "所見訂閱源：{{labels}}",
+      "rosterLegend": "分級用於為來源排序，並不判斷此說法的真偽。",
+      "tierDocsLink": "分級如何分配",
+      "tierChip": "T{{tier}}",
+      "tierChipUndeclared": "T?",
+      "tierTitle1": "一級：通訊社和官方機構",
+      "tierTitle2": "二級：主流媒體",
+      "tierTitle3": "三級：專業、地區和智庫來源",
+      "tierTitle4": "四級：聚合器和部落格",
+      "tierTitleUndeclared": "分級未宣告：尚未稽核",
+      "rosterSummary": "由{{publishers}}報道",
+      "rosterSummaryTier1": "由{{publishers}}報道，其中{{tier1}}家為一級來源",
+      "rosterPublishers_other": "{{count}}家媒體"
     }
   },
   "popups": {

@@ -230,3 +230,32 @@ describe('get_news_intelligence corroboration (#6419)', () => {
     assert.deepEqual(data.insights.topStories[0].corroboration, { state: 'corroborated', publishers: 3 });
   });
 });
+
+describe('get_news_intelligence publisher roster (#6419 step 3)', () => {
+  it('lists each top story publisher with its declared tier from the same labels as corroboration', () => {
+    const data = envelope([
+      story({ primaryTitle: 'mixed', sources: ['The Verge', 'Reuters World', 'Reuters US', 'Unreviewed Local Desk'] }),
+      story({ primaryTitle: 'legacy' }),
+      story({ primaryTitle: 'malformed', sources: 'Reuters' }),
+    ]);
+
+    newsTool._postFilter(data, {});
+
+    const [mixed, legacy, malformed] = data.insights.topStories;
+    assert.deepEqual(mixed.publishers, [
+      { name: 'Reuters', tier: 1, labels: ['Reuters World', 'Reuters US'] },
+      { name: 'The Verge', tier: 4, labels: ['The Verge'] },
+      { name: 'Unreviewed Local Desk', tier: null, labels: ['Unreviewed Local Desk'] },
+    ]);
+    assert.equal(mixed.publishersUnlisted, 0);
+    assert.deepEqual([legacy.publishers, legacy.publishersUnlisted], [[], 0]);
+    assert.deepEqual([malformed.publishers, malformed.publishersUnlisted], [[], 0]);
+  });
+
+  it('documents the roster in the output schema', () => {
+    const storySchema = newsTool.outputSchema.properties.data.properties.insights.properties.topStories.items;
+    assert.deepEqual(storySchema.properties.publishers.items.required, ['name', 'tier', 'labels']);
+    assert.deepEqual(storySchema.properties.publishers.items.properties.tier.enum, [1, 2, 3, 4, null]);
+    assert.equal(storySchema.properties.publishersUnlisted.type, 'integer');
+  });
+});

@@ -258,6 +258,13 @@ describe('#5697 NLP MCP tools', () => {
     assert.ok(clusterSchema.properties.sourceProvenance.items.required.includes('knownBiases'));
     assert.ok(clusterSchema.properties.sourceProvenance.items.required.includes('summary'));
     assert.deepEqual(clusterSchema.properties.primarySourceProvenance.properties.knownBiases.items, { type: 'string' });
+    assert.ok(clusterSchema.properties.sourceProvenance.items.required.includes('tier'));
+    assert.deepEqual(clusterSchema.properties.sourceProvenance.items.properties.tier.enum, [1, 2, 3, 4, null]);
+    assert.ok(clusterSchema.required.includes('publishers'));
+    assert.ok(clusterSchema.required.includes('publishersUnlisted'));
+    assert.deepEqual(clusterSchema.properties.publishers.items.required, ['name', 'tier', 'labels']);
+    assert.deepEqual(clusterSchema.properties.publishers.items.properties.tier.enum, [1, 2, 3, 4, null]);
+    assert.equal(clusterSchema.properties.publishersUnlisted.type, 'integer');
     const digestCoverageFields = [
       'state',
       'servedItems',
@@ -871,6 +878,10 @@ describe('#5697 NLP MCP tools', () => {
           result.clusters.every((cluster) => cluster.sourceProvenance.length === 8),
           'the fixture must actually exercise all eight provenance slots',
         );
+        assert.ok(
+          result.clusters.every((cluster) => cluster.publishers.length === 8),
+          'the fixture must actually exercise all eight roster slots',
+        );
         for (const cluster of result.clusters) {
           assert.ok(Buffer.byteLength(cluster.title, 'utf8') <= 512);
           assert.ok(Buffer.byteLength(cluster.link, 'utf8') <= 2_048);
@@ -1196,6 +1207,54 @@ describe('#5697 NLP MCP tools', () => {
       } finally {
         globalThis.fetch = originalFetchImpl;
       }
+    });
+
+    it('declares each source tier and lists the publisher roster, never defaulting an undeclared tier to 4 (#6419 step 3)', async () => {
+      const labels = ['The Verge', 'Reuters World', 'Reuters US', 'The Vergecast', 'Unreviewed Local Desk'];
+      await withDigestCategories({
+        politics: {
+          items: labels.map((source, i) => ({
+            source,
+            title: 'Sanctions package advances through committee vote',
+            link: `https://n/roster/${i}`,
+            publishedAt: 1785405600000 - i * 1000,
+          })),
+        },
+      }, async () => {
+        const { result } = await callTool('get_news_clusters', {});
+        assert.equal(result.totalClusters, 1, 'fixture must cluster into one story');
+        const [cluster] = result.clusters;
+        assert.deepEqual(
+          Object.fromEntries(cluster.sourceProvenance.map((entry) => [entry.source, entry.tier])),
+          { 'The Verge': 4, 'Reuters World': 1, 'Reuters US': 1, 'The Vergecast': 3, 'Unreviewed Local Desk': null },
+        );
+        assert.deepEqual(cluster.publishers, [
+          { name: 'Reuters', tier: 1, labels: ['Reuters World', 'Reuters US'] },
+          { name: 'The Verge', tier: 3, labels: ['The Verge', 'The Vergecast'] },
+          { name: 'Unreviewed Local Desk', tier: null, labels: ['Unreviewed Local Desk'] },
+        ]);
+        assert.equal(cluster.publishersUnlisted, 0);
+        assert.equal(cluster.publishers.length, cluster.distinctSourceCount, 'roster and count read the same members');
+      });
+    });
+
+    it('caps the roster at eight publishers and counts the rest', async () => {
+      await withDigestCategories({
+        politics: {
+          items: Array.from({ length: 11 }, (_, i) => ({
+            source: `Unreviewed Desk ${i}`,
+            title: 'Sanctions package advances through committee vote',
+            link: `https://n/cap/${i}`,
+            publishedAt: 1785405600000 - i * 1000,
+          })),
+        },
+      }, async () => {
+        const { result } = await callTool('get_news_clusters', {});
+        const [cluster] = result.clusters;
+        assert.equal(cluster.distinctSourceCount, 11);
+        assert.equal(cluster.publishers.length, 8);
+        assert.equal(cluster.publishersUnlisted, 3);
+      });
     });
   });
 

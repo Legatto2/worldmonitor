@@ -8,8 +8,12 @@ export {
   evidenceFromCluster,
   evidenceFromItem,
   evidenceFromStory,
+  publisherRoster,
   type Corroboration,
+  type Publisher,
+  type PublisherRoster,
 } from '../../server/_shared/corroboration';
+export { TIER_DOCS_HREF, type DeclaredTier } from '../../server/_shared/source-tiers';
 
 export type CorroborationFlag = { readonly text: string; readonly hint: string };
 

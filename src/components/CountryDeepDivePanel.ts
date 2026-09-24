@@ -62,9 +62,8 @@ import { CHINA_DECISION_SIGNAL_GROUP_IDS } from '../../shared/china-decision-sig
 import { fetchMultiSectorCostShock, HS2_SHORT_LABELS } from '@/services/supply-chain';
 import type { MapContainer } from './MapContainer';
 import { dedupeHeadlines } from './CountryDeepDivePanel-news-utils';
-import { assessCorroboration, evidenceFromCluster } from '@/utils/corroboration-flag';
-import { countPublisherFamilies } from '../../shared/publisher-families.js';
-import { corroborationFlag } from '@/utils/corroboration-flag';
+import { assessCorroboration, corroborationFlag, evidenceFromCluster, publisherRoster } from '@/utils/corroboration-flag';
+import { describePublisherRoster, renderPublisherRosterElement } from './news/publisher-roster';
 import { decodeHtmlEntities } from '@/utils/html-entities';
 import { renderFollowButton } from '@/utils/follow-button';
 import { renderNotifyCountryLink } from '@/utils/notify-country-link';
@@ -435,11 +434,9 @@ export class CountryDeepDivePanel implements CountryBriefPanel {
     }
 
     for (let i = 0; i < deduped.length; i++) {
-      const { item, sources, items } = deduped[i]!;
-      const corroboration = assessCorroboration(evidenceFromCluster({ allItems: items }));
-      // Counts only publishers this row can list in its tooltip; the pill carries the digest-wide verdict.
-      const otherPublishers = countPublisherFamilies(sources) - 1;
-      const otherLabels = sources.slice(1);
+      const { item, items } = deduped[i]!;
+      const evidence = evidenceFromCluster({ allItems: items });
+      const corroboration = assessCorroboration(evidence);
       const row = this.el('a', 'cdp-news-item');
       row.id = `cdp-news-${i + 1}`;
       const href = sanitizeUrl(item.link);
@@ -488,13 +485,7 @@ export class CountryDeepDivePanel implements CountryBriefPanel {
       }
 
       const title = this.el('div', 'cdp-news-title', decodeHtmlEntities(item.title));
-      const metaText = otherPublishers > 0
-        ? `${item.source} +${otherPublishers} ${otherPublishers === 1 ? 'source' : 'sources'} • ${this.formatRelativeTime(item.pubDate)}`
-        : `${item.source} • ${this.formatRelativeTime(item.pubDate)}`;
-      const meta = this.el('div', 'cdp-news-meta', metaText);
-      if (otherLabels.length > 0) {
-        meta.setAttribute('title', `Also reported by: ${otherLabels.join(', ')}`);
-      }
+      const meta = this.el('div', 'cdp-news-meta', `${item.source} • ${this.formatRelativeTime(item.pubDate)}`);
       const flag = corroborationFlag(corroboration);
       if (flag) {
         const pill = this.el('span', 'corroboration-flag', flag.text);
@@ -503,12 +494,18 @@ export class CountryDeepDivePanel implements CountryBriefPanel {
       }
       row.append(top, title, meta);
 
+      // The roster is interactive, so it sits beside the link rather than inside it.
+      const entry = this.el('div', 'cdp-news-entry');
+      entry.append(row);
+      const roster = describePublisherRoster(corroboration, publisherRoster(evidence));
+      if (roster) entry.append(renderPublisherRosterElement(roster));
+
       if (i >= 3) {
         const wrapper = this.el('div', 'cdp-expanded-only');
-        wrapper.append(row);
+        wrapper.append(entry);
         this.newsBody.append(wrapper);
       } else {
-        this.newsBody.append(row);
+        this.newsBody.append(entry);
       }
     }
     const more = this.el('button', 'cdp-inline-action cdp-summary-only', `Read all ${deduped.length} headlines ↗`);

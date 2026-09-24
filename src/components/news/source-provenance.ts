@@ -118,17 +118,20 @@ export function renderPrimarySourceProvenance(sourceName: string): PrimarySource
   };
 }
 
-/** Render the compact risk marker shown for corroborating sources. */
-export function renderCorroboratingSourceRisk(sourceName: string): string {
+/** The compact risk marker shown beside a corroborating source; null when there is nothing to disclose. */
+export function getCorroboratingSourceRiskBadge(sourceName: string): SourceProvenanceBadge | null {
   const profile = getSourcePropagandaRisk(sourceName);
   const sourceType = getSourceType(sourceName);
   const description = describePropagandaBadge(profile, sourceType);
   if (description) {
-    return `<span class="propaganda-badge ${description.risk}" title="${escapeHtml(description.title)}">${description.shortLabel}</span>`;
+    return { className: `propaganda-badge ${description.risk}`, title: description.title, label: description.shortLabel };
   }
   if (getProvenanceFacts(profile, sourceType).length > 0) {
-    const title = `${composeProvenanceSummary(profile, sourceType)} ${PERSPECTIVE_LABEL_CAVEAT}`;
-    return `<span class="provenance-fact-marker" title="${escapeHtml(title)}">◐</span>`;
+    return {
+      className: 'provenance-fact-marker',
+      title: `${composeProvenanceSummary(profile, sourceType)} ${PERSPECTIVE_LABEL_CAVEAT}`,
+      label: '◐',
+    };
   }
-  return '';
+  return null;
 }

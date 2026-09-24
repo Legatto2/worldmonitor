@@ -13,11 +13,6 @@
  * Telegram and X tiers are additive typed overlays. Keeping them out of the RSS
  * JSON makes their registries mechanically testable and prevents renamed
  * channels or accounts from leaving stale public tier keys.
- *
- * Tier 1: Wire services / official gov/intl orgs — fastest, most authoritative
- * Tier 2: Major established outlets — high-quality journalism
- * Tier 3: Specialty / regional / think tank sources — domain expertise
- * Tier 4: Aggregators and blogs — useful but less authoritative
  */
 import sourceTiersData from '../../shared/source-tiers.json';
 import { TELEGRAM_SOURCE_TIERS } from '../../shared/telegram-channel-trust';
@@ -34,6 +29,17 @@ export function getSourceTier(sourceName: string): number {
 }
 
 export type DeclaredTier = 1 | 2 | 3 | 4;
+
+/** What each tier means, in the words the docs table, the app and MCP schemas use. */
+export const TIER_MEANING: Readonly<Record<DeclaredTier, string>> = Object.freeze({
+  1: 'Wire services and official bodies',
+  2: 'Major outlets',
+  3: 'Specialist, regional and think-tank sources',
+  4: 'Aggregators and blogs',
+});
+
+/** The public tier table. The docs site keeps "&" in heading anchors. */
+export const TIER_DOCS_HREF = '/docs/data-sources#source-credibility-%26-feed-tiering';
 
 /**
  * The tier a label was explicitly assigned in the RSS, Telegram or X tables,

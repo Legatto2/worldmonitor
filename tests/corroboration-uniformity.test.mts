@@ -1,5 +1,6 @@
 /**
- * #6419 step 2: the single-source / tier-4-only rule applies uniformly.
+ * #6419 steps 2 and 3: the single-source / tier-4-only rule and the publisher
+ * roster apply uniformly.
  *
  * Acceptance: "a test asserts no source, tier, or category is exempt". Every
  * case below is enumerated from the live tables (RSS JSON + Telegram + X
@@ -12,17 +13,29 @@ import { describe, it } from 'node:test';
 
 import {
   CORROBORATION_OUTPUT_SCHEMA,
+  PUBLISHER_ROSTER_CAP,
+  PUBLISHER_ROSTER_OUTPUT_PROPERTIES,
+  PUBLISHER_ROSTER_STRING_MAX_BYTES,
   assessCorroboration,
   evidenceFromCluster,
   evidenceFromItem,
+  evidenceFromStory,
+  publisherRoster,
   toCorroborationJson,
+  toPublisherRosterJson,
   type ClaimEvidence,
   type Corroboration,
+  type Publisher,
 } from '../server/_shared/corroboration.ts';
-import { SOURCE_TIERS, declaredSourceTier, getSourceTier } from '../server/_shared/source-tiers.ts';
+import { SOURCE_TIERS, TIER_MEANING, declaredSourceTier, getSourceTier } from '../server/_shared/source-tiers.ts';
 import { clusterNewsCore } from '../shared/news-clustering-core.js';
 import { THREAT_CATEGORIES, THREAT_LEVELS } from '../shared/jev-classify.js';
-import { publisherFamilyFor } from '../shared/publisher-families.js';
+import {
+  PUBLISHER_FAMILIES,
+  countPublisherFamilies,
+  publisherFamilyFor,
+  publisherNameForFamily,
+} from '../shared/publisher-families.js';
 
 const UNDECLARED = 'Synthetic Unmapped Outlet 6419';
 const STORY = 'Missile attack kills troops in border strike officials say';
@@ -31,6 +44,7 @@ const grouped = (labels: string[], reportedPublishers: number | null = null): Cl
   ({ kind: 'grouped', labels, reportedPublishers });
 
 const declaredLabels = Object.keys(SOURCE_TIERS);
+const curatedFamilies = Object.entries(PUBLISHER_FAMILIES);
 const tier4Labels = declaredLabels.filter((label) => SOURCE_TIERS[label] === 4);
 
 function sampleFor(tier: 1 | 2 | 3 | null, avoidFamily: string): string {
@@ -217,4 +231,185 @@ describe('assessCorroboration: no category, threat level or alert flag is exempt
       assert.equal(seen.size, 1, `${labels.join('+')} verdict varied with category/level/alert`);
     }
   });
+});
+
+const bestDeclared = (labels: readonly string[]): Publisher['tier'] => labels
+  .map((label) => declaredSourceTier(label))
+  .reduce<Publisher['tier']>((best, tier) => (tier !== null && (best === null || tier < best) ? tier : best), null);
+
+function expectedPublisher(labels: string[]): Publisher {
+  const family = publisherFamilyFor(labels[0]);
+  return {
+    family,
+    name: Object.prototype.hasOwnProperty.call(PUBLISHER_FAMILIES, family) ? publisherNameForFamily(family) : labels[0]!.trim(),
+    tier: bestDeclared(labels),
+    labels,
+  };
+}
+
+function rosterCorpus(): string[][] {
+  const lists: string[][] = [
+    [...declaredLabels, UNDECLARED],
+    ...curatedFamilies.map(([, entry]) => [...entry.labels]),
+    ...tier4PairsInDistinctFamilies(),
+    ['', '  ', 'Reuters World', UNDECLARED, 'Reuters World'],
+  ];
+  for (const [a] of tier4PairsInDistinctFamilies()) {
+    for (const tier of [1, 2, 3, null] as const) lists.push([a, sampleFor(tier, publisherFamilyFor(a))]);
+  }
+  return lists;
+}
+
+describe('publisherRoster: no source, tier or family is exempt (#6419 step 3)', () => {
+  it('a lone label is one publisher at exactly its declared tier, for every table key and an undeclared label', () => {
+    for (const label of [...declaredLabels, UNDECLARED]) {
+      assert.deepEqual(publisherRoster(grouped([label])), [expectedPublisher([label])], label);
+      assert.deepEqual(publisherRoster(evidenceFromItem({ source: label })), [expectedPublisher([label])], `item ${label}`);
+    }
+  });
+
+  it('an undeclared label is never tier 4', () => {
+    assert.equal(publisherRoster(grouped([UNDECLARED]))[0]!.tier, null);
+    assert.equal(publisherRoster(grouped(['constructor']))[0]!.tier, null);
+  });
+
+  it('every curated family over all its labels is one publisher at the best tier any of them declares', () => {
+    for (const [family, entry] of curatedFamilies) {
+      const roster = publisherRoster(grouped([...entry.labels]));
+      if (entry.labels.length === 0) {
+        assert.deepEqual(roster, [], `${family} is domain-only: no label, nothing to list`);
+        continue;
+      }
+      assert.deepEqual(roster, [{
+        family,
+        name: entry.publisher,
+        tier: bestDeclared(entry.labels),
+        labels: [...entry.labels],
+      }], family);
+    }
+  });
+
+  it('a family with conflicting declared tiers shows the tier of the labels this claim carries', () => {
+    const conflicting = curatedFamilies.filter(([, entry]) =>
+      new Set(entry.labels.map((label) => declaredSourceTier(label)).filter((tier) => tier !== null)).size > 1);
+    assert.ok(conflicting.length > 0, 'no family carries conflicting tiers any more; this case is vacuous');
+    for (const [family, entry] of conflicting) {
+      for (const label of entry.labels) {
+        assert.equal(publisherRoster(grouped([label]))[0]!.tier, declaredSourceTier(label), `${family} ${label}`);
+      }
+    }
+  });
+
+  it('roster length is the seen family count for every list in the corpus', () => {
+    for (const labels of rosterCorpus()) {
+      assert.equal(publisherRoster(grouped(labels)).length, countPublisherFamilies(labels), labels.join(' + '));
+    }
+  });
+
+  it('orders by tier ascending, undeclared last, then name', () => {
+    const roster = publisherRoster(grouped([UNDECLARED, 'The Verge', 'BBC World', 'Reuters World', 'Defense One', 'AFP']));
+    assert.deepEqual(roster.map((p) => [p.name, p.tier]), [
+      ['AFP', 1], ['Reuters', 1], ['BBC', 2], ['Defense One', 3], ['The Verge', 4], [UNDECLARED, null],
+    ]);
+  });
+
+  it('keeps each distinct label once in first-seen order, so the tier traces to a label', () => {
+    assert.deepEqual(publisherRoster(grouped(['The Verge', 'The Vergecast', 'The Verge'])), [
+      { family: 'the-verge', name: 'The Verge', tier: 3, labels: ['The Verge', 'The Vergecast'] },
+    ]);
+  });
+
+  it('is empty exactly when there are no labels to read', () => {
+    assert.deepEqual(publisherRoster(grouped([])), []);
+    assert.deepEqual(publisherRoster(grouped(['', '  '])), []);
+    assert.deepEqual(publisherRoster(evidenceFromStory({ sources: 'Reuters' })), []);
+  });
+});
+
+describe('publisherRoster agrees with assessCorroboration', () => {
+  it('tier4-only means every row and every listed label is declared tier 4, and the verdict never counts fewer publishers than rows', () => {
+    let tier4Seen = 0;
+    for (const labels of rosterCorpus()) {
+      for (const reported of [null, 1, labels.length + 1]) {
+        const evidence = grouped(labels, reported);
+        const verdict = assessCorroboration(evidence);
+        const roster = publisherRoster(evidence);
+        const context = `${labels.join(' + ')} reported=${reported}`;
+        if (verdict.state === 'tier4-only') {
+          tier4Seen += 1;
+          assert.ok(roster.every((p) => p.tier === 4), context);
+          assert.ok(roster.every((p) => p.labels.every((label) => declaredSourceTier(label) === 4)), context);
+        }
+        if (verdict.state === 'unknown') {
+          assert.equal(roster.length, 0, context);
+        } else {
+          assert.ok(roster.length > 0, context);
+          assert.ok(verdict.publishers >= roster.length, context);
+        }
+      }
+    }
+    assert.ok(tier4Seen > 0, 'the corpus never produced tier4-only; the agreement check is vacuous');
+  });
+});
+
+describe('publisher roster wire form', () => {
+  it(`lists at most ${PUBLISHER_ROSTER_CAP} publishers and counts the rest`, () => {
+    const labels = Array.from({ length: PUBLISHER_ROSTER_CAP + 4 }, (_, i) => `${UNDECLARED} ${i}`);
+    const json = toPublisherRosterJson(publisherRoster(grouped(['Reuters World', ...labels])));
+    assert.equal(json.publishers.length, PUBLISHER_ROSTER_CAP);
+    assert.equal(json.publishersUnlisted, 5);
+    assert.deepEqual(json.publishers[0], { name: 'Reuters', tier: 1, labels: ['Reuters World'] });
+    assert.deepEqual(toPublisherRosterJson([]), { publishers: [], publishersUnlisted: 0 });
+  });
+
+  it(`caps wire strings at ${PUBLISHER_ROSTER_STRING_MAX_BYTES} UTF-8 bytes without splitting a character`, () => {
+    const long = `${'é'.repeat(30)}${'本'.repeat(10)}`;
+    const [publisher] = toPublisherRosterJson(publisherRoster(grouped([long]))).publishers;
+    assert.equal(publisher!.name, 'é'.repeat(20));
+    assert.deepEqual(publisher!.labels, ['é'.repeat(20)]);
+  });
+
+  it('every configured label and publisher name fits the wire cap whole', () => {
+    const names = [...declaredLabels, ...curatedFamilies.flatMap(([, entry]) => [entry.publisher, ...entry.labels])];
+    const tooLong = names.filter((name) => Buffer.byteLength(name, 'utf8') > PUBLISHER_ROSTER_STRING_MAX_BYTES);
+    assert.deepEqual(tooLong, [], 'raise PUBLISHER_ROSTER_STRING_MAX_BYTES only after re-measuring the get_news_clusters worst-case budget');
+  });
+
+  it('schema tier enum is the declared tiers plus null, described from TIER_MEANING', () => {
+    const schema = PUBLISHER_ROSTER_OUTPUT_PROPERTIES as {
+      publishers: { items: { properties: { tier: { enum: unknown[]; description: string } }; required: string[] } };
+    };
+    const tier = schema.publishers.items.properties.tier;
+    assert.deepEqual(tier.enum, [1, 2, 3, 4, null]);
+    for (const meaning of Object.values(TIER_MEANING)) assert.ok(tier.description.includes(meaning), meaning);
+    assert.deepEqual(schema.publishers.items.required, ['name', 'tier', 'labels']);
+  });
+});
+
+describe('publisherRoster: no category, threat level or alert flag is exempt', () => {
+  const [t4a, t4b] = tier4PairsInDistinctFamilies()[0]!;
+  for (const labels of [['Reuters World'], ['Reuters World', 'Reuters US'], [t4a, t4b], [t4a, 'Reuters World', UNDECLARED]]) {
+    it(`${labels.join(' + ')} yields one roster for every category x level x isAlert`, () => {
+      const seen = new Set<string>();
+      for (const category of THREAT_CATEGORIES) {
+        for (const level of THREAT_LEVELS) {
+          for (const isAlert of [true, false]) {
+            const items = labels.map((source) => ({
+              source,
+              title: STORY,
+              link: `https://example.test/${encodeURIComponent(source)}`,
+              pubDate: new Date('2026-09-20T10:00:00Z'),
+              isAlert,
+              threat: { level, category, confidence: 0.9, source: 'keyword' as const },
+            }));
+            const clusters = clusterNewsCore(items, getSourceTier);
+            assert.equal(clusters.length, 1);
+            seen.add(JSON.stringify(publisherRoster(evidenceFromCluster(clusters[0]!))));
+          }
+        }
+      }
+      assert.equal(seen.size, 1, 'roster varied with category/level/alert');
+      assert.equal((JSON.parse([...seen][0]!) as unknown[]).length, countPublisherFamilies(labels));
+    });
+  }
 });

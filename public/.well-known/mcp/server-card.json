@@ -69,7 +69,7 @@
     },
     {
       "name": "get_news_intelligence",
-      "description": "AI-classified geopolitical threat news summaries, GDELT intelligence signals, cross-source signals including physical-premium regime transitions, and security advisories from WorldMonitor's intelligence layer. Each top story carries full corroboration metadata — uniqueSourceCount, corroborationSourceCount, entityCorroboration, sourceTier, the contributing outlet names, every clustered headline, credibilityScore (0-100 source reliability, distinct from importance), and corroboration; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy.",
+      "description": "AI-classified geopolitical threat news summaries, GDELT intelligence signals, cross-source signals including physical-premium regime transitions, and security advisories from WorldMonitor's intelligence layer. Each top story carries full corroboration metadata — uniqueSourceCount, corroborationSourceCount, entityCorroboration, sourceTier, the contributing outlet names, every clustered headline, credibilityScore (0-100 source reliability, distinct from importance), corroboration, and the publishers roster with each publisher's declared tier; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy.",
       "_meta": {
         "worldmonitor/access": "free-account"
       }
@@ -538,7 +538,7 @@
     },
     {
       "name": "get_news_clusters",
-      "description": "Current topic clusters over the live headline digest, computed with the same Jaccard clustering the dashboard uses. Select the full digest (default) or tech digest with variant, then optionally restrict by category such as commodities, vcblogs, or accelerators. Each cluster reports its primary headline, member count, distinct sources with fail-closed provenance, top keywords, threat level, time span, credibilityScore (0-100 source reliability, distinct from importance), and corroboration; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. The result includes digestCoverage so agents can distinguish complete, partial, stale, and unavailable input. Deterministic — no LLM.",
+      "description": "Current topic clusters over the live headline digest, computed with the same Jaccard clustering the dashboard uses. Select the full digest (default) or tech digest with variant, then optionally restrict by category such as commodities, vcblogs, or accelerators. Each cluster reports its primary headline, member count, distinct sources with fail-closed provenance and declared tier, top keywords, threat level, time span, credibilityScore (0-100 source reliability, distinct from importance), corroboration, and the publishers roster with each publisher's declared tier; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. The result includes digestCoverage so agents can distinguish complete, partial, stale, and unavailable input. Deterministic — no LLM.",
       "_meta": {
         "worldmonitor/access": "subscription"
       }

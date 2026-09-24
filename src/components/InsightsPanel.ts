@@ -10,7 +10,8 @@ import { getTheaterPostureSummaries } from '@/services/military-surge';
 import { getCachedPosture } from '@/services/cached-theater-posture';
 import { isMobileDevice } from '@/utils';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
-import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromStory } from '@/utils/corroboration-flag';
+import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromStory, publisherRoster } from '@/utils/corroboration-flag';
+import { describePublisherRoster, renderPublisherRosterHtml } from './news/publisher-roster';
 import { collectBriefCitationSources, collectBriefSources, normalizeCachedBriefSources, renderBriefSourcesFooter, type BriefSource } from '@/utils/brief-sources';
 import { formatIntelBrief } from '@/utils/format-intel-brief';
 import { SITE_VARIANT } from '@/config';
@@ -682,8 +683,11 @@ export class InsightsPanel extends Panel {
       } else if (storyPublishers >= 2) {
         badges.push(`<span class="insight-badge multi">${t('components.insights.sources', { count: storyPublishers })}</span>`);
       }
-      const storyFlag = corroborationFlagHtml(assessCorroboration(evidenceFromStory(story)));
+      const storyEvidence = evidenceFromStory(story);
+      const storyCorroboration = assessCorroboration(storyEvidence);
+      const storyFlag = corroborationFlagHtml(storyCorroboration);
       if (storyFlag) badges.push(storyFlag);
+      const rosterView = describePublisherRoster(storyCorroboration, publisherRoster(storyEvidence));
 
       if (story.isAlert) {
         badges.push(`<span class="insight-badge alert">⚠ ${t('components.insights.alert')}</span>`);
@@ -708,6 +712,7 @@ export class InsightsPanel extends Panel {
             <span class="insight-story-title">${escapeHtml(story.primaryTitle.slice(0, 100))}${story.primaryTitle.length > 100 ? '...' : ''}</span>
           </div>
           ${badges.length > 0 ? `<div class="insight-badges">${badges.join('')}</div>` : ''}
+          ${rosterView ? renderPublisherRosterHtml(rosterView) : ''}
         </div>
       `;
     }).join('');
