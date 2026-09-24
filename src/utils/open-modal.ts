@@ -1,10 +1,10 @@
 /**
  * "Is a real modal open right now?" — the shared answer.
  *
- * Two consumers want identical semantics: the service-worker updater (which
- * must not reload the page out from under an open dialog) and the passkey offer
- * prompt (which must not sit beneath a focus trap, announced to assistive
- * technology but unreachable by keyboard).
+ * Three consumers want identical semantics: the service-worker updater and the
+ * stale-bundle check (neither may reload the page out from under an open
+ * dialog) and the passkey offer prompt (which must not sit beneath a focus
+ * trap, announced to assistive technology but unreachable by keyboard).
  *
  * Extracted rather than copied. A second copy of the selector drifts the moment
  * someone adds a modal, and the two failure modes are both silent: a stale copy
