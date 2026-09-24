@@ -79,6 +79,13 @@ describe('partial sanctions publication', () => {
     assert.equal(data.consolidatedCount, 0);
   });
 
+  it('counts both sources when both succeed', async () => {
+    const data = await partialPublication({ sources: ['SDN', 'CONSOLIDATED'] });
+    assert.equal(data.sdnCount, 1);
+    assert.equal(data.consolidatedCount, 1);
+    assert.equal(data.totalCount, 2);
+  });
+
   it('does not republish the malformed retained Canadian identities', async () => {
     const cached = ['sema-ca:unspecified:unspecified:0', 'sema-ca:1972:unspecified:0'].map((id) => ({
       id, name: '1, Part 1', sourceLists: [SEMA_SOURCE], countryCodes: [], countryNames: [],
@@ -89,6 +96,7 @@ describe('partial sanctions publication', () => {
     assert.equal(data.totalCount, 1);
     assert.ok(data.entries.every((e) => !e.sourceLists.includes(SEMA_SOURCE)));
     assert.ok(data._entityIndex.every((e) => !e.id.startsWith('sema-ca:')));
+    await assert.rejects(partialPublication({ sources: [], cached }), /all sanctions lists failed/);
   });
 
   it('retains valid undated cached identities with an optional schedule', async () => {
