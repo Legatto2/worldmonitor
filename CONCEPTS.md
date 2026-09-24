@@ -633,7 +633,9 @@ Left running, it is pure loss. It holds runner capacity against the very commit 
 
 A scheduled or post-deploy run whose only purpose is to notice breakage no change-triggered run would surface, whether by probing a live production surface or by sweeping the whole repository. Its value is entirely in running to completion, because a result it never produces is indistinguishable from a passing one.
 
-This makes it the opposite of a Superseded Run under contention: a net must never be evicted, since an evicted probe reads as neither pass nor fail and the coverage is lost silently. Where a workflow mixes a net with ordinary change-proposal jobs, the eviction rule is therefore attached to the individual job rather than the workflow, because a workflow-wide rule is evaluated before the conditions that decide which jobs were going to run at all. See also: Superseded Run, Deploy Gate.
+This makes it the opposite of a Superseded Run under contention: a net must never be evicted, since an evicted probe reads as neither pass nor fail and the coverage is lost silently. Where a workflow mixes a net with ordinary change-proposal jobs, the eviction rule is therefore attached to the individual job rather than the workflow, because a workflow-wide rule is evaluated before the conditions that decide which jobs were going to run at all.
+
+A net's verdict is worth no more than the upstream read it rests on, and the dangerous reads are the ones that succeed. An external listing that can answer, successfully and with nothing in the response to mark it, with a view of history older than the truth will make a net contradict reality in both directions: it cries wolf when the stale view falls outside the net's age window, and — the direction nobody notices — reports healthy when the stale view falls inside it and the net grades an old, passing result. Retry logic cannot separate the two, because it classifies by whether the system answered and this is an answer. The remedy is to sample the read and reduce across samples rather than trust one: a stale view is an older view of the same history, so it can omit what is recent but cannot invent what never happened, and the most recent thing seen across several reads is therefore always real. Any verdict a net can reach from a single successful-but-uncorroborated read is a verdict it should require corroboration for. See also: Superseded Run, Deploy Gate, Third-Party Rot.
 
 ## Localization & First Paint
 
@@ -1061,6 +1063,20 @@ The pause keys on input, not on whether anyone is watching, so input inside an e
 ### Always-On Playback
 
 A viewer preference that starts live news and webcams as soon as their panels are visible instead of waiting for Play. It governs autoplay only; how long video keeps playing without input is the Idle Pause preference, and once an Idle Pause has happened it does not restart video on tab return or scroll-back either. A viewer who saved it before the Idle Pause preference existed is treated as never pausing until they choose a duration, which preserves what the preference used to imply. See also: Idle Pause.
+
+## Conflict Data Sources
+
+### Candidate Release
+
+UCDP's monthly preliminary conflict-event release, published ahead of its annual dataset and merged with a slice of that annual base into one event payload.
+
+A candidate release is not a list of interchangeable events. Besides dated incidents, it carries aggregate rows that cover a whole period and are dated to the period's first day, so any transform that trims rows by recency removes the heaviest rows first. The payload's per-month death totals must equal the release's own; a cap or window that cannot keep the whole candidate release is a data loss, not a size optimization. See also: Reference Period, Seed-Owned Key.
+
+### Reference Period
+
+The calendar month a humanitarian conflict summary describes, as distinct from when the summary was fetched or written.
+
+Two sources can be compared only on a shared reference period, so a seeder that keeps just the newest period makes cross-source comparison impossible whenever the sources publish on different schedules. The newest period can also move backwards: when the preferred bulk source is unavailable and a fallback channel lacks the latest month, the newest period on record falls back a month while the run itself looks fresh. The event categories reported for a period can overlap (one category can be a subset of another), so a per-period total is never the plain sum of its categories unless the source says they are mutually exclusive. See also: Candidate Release, Content-Age Contract, Source Tag.
 
 ## Naval Vessel Classification
 
