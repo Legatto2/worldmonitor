@@ -6871,6 +6871,20 @@
       ]
     },
     {
+      "host": "oauth2.googleapis.com",
+      "provider": "oauth2.googleapis.com",
+      "kind": "structured",
+      "observed": true,
+      "license": "Excluded: first-party, control-plane, UI, or rendering transport",
+      "attribution": "Excluded from the external-provider count: not an ingested upstream dataset.",
+      "status": "excluded",
+      "references": [
+        {
+          "path": "scripts/seo-gsc-collect.mjs"
+        }
+      ]
+    },
+    {
       "host": "oc-media.org",
       "provider": "oc-media.org",
       "kind": "feed",
@@ -8378,6 +8392,20 @@
       "references": [
         {
           "path": "scripts/seo-indexnow-submit.mjs"
+        }
+      ]
+    },
+    {
+      "host": "searchconsole.googleapis.com",
+      "provider": "searchconsole.googleapis.com",
+      "kind": "structured",
+      "observed": true,
+      "license": "Excluded: first-party, control-plane, UI, or rendering transport",
+      "attribution": "Excluded from the external-provider count: not an ingested upstream dataset.",
+      "status": "excluded",
+      "references": [
+        {
+          "path": "scripts/seo-gsc-collect.mjs"
         }
       ]
     },
@@ -12195,6 +12223,20 @@
         },
         {
           "path": "src/components/MapPopup.ts"
+        }
+      ]
+    },
+    {
+      "host": "www.googleapis.com",
+      "provider": "www.googleapis.com",
+      "kind": "structured",
+      "observed": true,
+      "license": "Excluded: first-party, control-plane, UI, or rendering transport",
+      "attribution": "Excluded from the external-provider count: not an ingested upstream dataset.",
+      "status": "excluded",
+      "references": [
+        {
+          "path": "scripts/seo-gsc-collect.mjs"
         }
       ]
     },
