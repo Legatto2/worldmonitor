@@ -172,8 +172,6 @@ describe('capWithAnnualFloor', () => {
   });
 
   it('reserves the annual floor once the candidate alone exceeds the cap', () => {
-    // The regression: 2500 candidate events would otherwise evict the annual
-    // base entirely from a 2000-event payload.
     const capped = capWithAnnualFloor(build(2500, 3000), isCandidate, MAX_EVENTS);
     assert.equal(capped.length, 2500 + CANDIDATE_ANNUAL_FLOOR);
     assert.equal(countCandidates(capped), 2500);
@@ -181,18 +179,27 @@ describe('capWithAnnualFloor', () => {
   });
 
   it('keeps the annual base represented at the measured live mix', () => {
-    // 1795 candidate / 2000 cap was the live mix when this was written; the
-    // plain slice left only 205 annual events and trended to zero.
     const capped = capWithAnnualFloor(build(1795, 3000), isCandidate, MAX_EVENTS);
     assert.equal(capped.length, 1795 + CANDIDATE_ANNUAL_FLOOR);
     assert.equal(countCandidates(capped), 1795);
     assert.equal(capped.length - countCandidates(capped), CANDIDATE_ANNUAL_FLOOR);
   });
 
-  it('gives unused annual slots back to the candidate rather than shipping a short payload', () => {
+  it('retains all candidates when the annual base cannot fill its floor', () => {
     const capped = capWithAnnualFloor(build(2500, 100), isCandidate, MAX_EVENTS);
     assert.equal(capped.length, 2600, 'all candidate rows and the available annual floor survive');
     assert.equal(capped.length - countCandidates(capped), 100, 'all available annual events kept');
+  });
+
+  it('fills spare capacity with annual history for a small candidate release', () => {
+    const capped = capWithAnnualFloor(build(100, 3000), isCandidate, MAX_EVENTS);
+    assert.equal(capped.length, MAX_EVENTS);
+    assert.equal(countCandidates(capped), 100);
+  });
+
+  it('preserves a candidate release when annual history is absent', () => {
+    const events = build(2500, 0);
+    assert.deepEqual(capWithAnnualFloor(events, isCandidate, MAX_EVENTS), events);
   });
 
   it('degrades to a plain newest-first cap when there is no candidate at all', () => {
