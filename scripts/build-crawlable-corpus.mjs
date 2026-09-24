@@ -4966,7 +4966,7 @@ function renderSignalConvergencePage({ signalConvergence, baseUrl, lastmod, snap
             <div class="metric"><span>${escapeHtml(metricName)}</span><strong>${escapeHtml(formatScore(example.score, OBSERVED_EVIDENCE))}</strong></div>
             <div class="metric"><span>Priority</span><strong>${escapeHtml(example.priority)}</strong></div>
           </div>
-          <p class="source">Cited from ${escapeHtml(example.source)}. Score = min(100, ${escapeHtml(String(example.typeCount))}×25 + min(25, ${escapeHtml(String(example.totalEvents))}×2)).</p>
+          <p class="source" data-snapshot-source="${escapeHtml(example.source)}">Cited from the <a href="/docs/geographic-convergence">Geographic Convergence Detection methodology</a>. Score = min(100, ${escapeHtml(String(example.typeCount))}×25 + min(25, ${escapeHtml(String(example.totalEvents))}×2)).</p>
         </article>`
   )).join('\n');
   const thresholds = (signalConvergence.thresholds || []).map((row) => (
@@ -5223,7 +5223,7 @@ function renderChangelogPage({ releases, pageIndex, totalPages, baseUrl, lastmod
   const title = pageIndex === 0
     ? 'World Monitor Changelog | World Monitor'
     : `World Monitor Changelog Page ${pageIndex + 1} | World Monitor`;
-  const description = 'Paginated release notes for World Monitor — new panels, data sources, API changes and fixes — built from the committed CHANGELOG.md so every release is crawlable.';
+  const description = 'Paginated release notes for World Monitor — new panels, data sources, API changes and fixes.';
   const body = `      <p class="eyebrow">Release notes</p>
       <h1>World Monitor changelog</h1>
       <p class="lede">${escapeHtml(description)}</p>
@@ -5238,7 +5238,7 @@ ${release.bullets.map((bullet) => `          <li>${escapeHtml(bullet)}</li>`).jo
         ${pageIndex > 0 ? `<a class="card" href="${changelogPagePath(pageIndex - 1)}">Previous page</a>` : ''}
         ${pageIndex + 1 < totalPages ? `<a class="card" href="${changelogPagePath(pageIndex + 1)}">Next page</a>` : ''}
       </nav>
-      <p class="source">Source: ${CHANGELOG_PATH}. Page ${pageIndex + 1} of ${totalPages}.</p>`;
+      <p class="source" data-snapshot-source="${CHANGELOG_PATH}">Source: World Monitor release notes. Page ${pageIndex + 1} of ${totalPages}.</p>`;
   return pageDocument({
     baseUrl,
     path,

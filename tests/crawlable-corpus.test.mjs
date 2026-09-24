@@ -2140,6 +2140,22 @@ describe('crawlable corpus generator', () => {
         assert.match(text, expected, `${page} names its source in reader terms`);
         assert.match(html, /data-snapshot-source="(?:docs\/snapshots\/|src\/config\/|shared\/|scripts\/)[^"]+"/, `${page} keeps the repo path as provenance`);
       }
+      const repoPath = /docs\/[\w./-]+|CHANGELOG\.md/;
+      for (const [page, expected, provenance] of [
+        ['accuracy/index.html', /Source: World Monitor forecast scorecard snapshot/, /data-snapshot-source="docs\/snapshots\/[^"]+"/],
+        ['research/strait-of-hormuz-transit-report-2026-07/index.html', /Snapshot: World Monitor chokepoint transit snapshot, retrieved \d{4}-\d{2}-\d{2}\./, /data-snapshot-source="docs\/snapshots\/[^"]+"/],
+        ['tools/signal-convergence/index.html', /Cited from the\s+Geographic Convergence Detection methodology/, /data-snapshot-source="docs\/geographic-convergence\.mdx"/],
+        ['reference/changelog/index.html', /Source: World Monitor release notes/, /data-snapshot-source="CHANGELOG\.md"/],
+      ]) {
+        const html = read(outDir, page);
+        // Release notes legitimately name repository files, so judge only the
+        // page's own framing: the lede and every source line.
+        const framing = [...html.matchAll(/<p class="(?:lede|source)"[^>]*>[\s\S]*?<\/p>/g)]
+          .map((match) => visibleText(match[0])).join(' ');
+        assert.doesNotMatch(framing, repoPath, `${page} shows a repository path to readers`);
+        assert.match(framing, expected, `${page} names its source in reader terms`);
+        assert.match(html, provenance, `${page} keeps the repo path as provenance`);
+      }
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
