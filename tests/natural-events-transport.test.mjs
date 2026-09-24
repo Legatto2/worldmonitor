@@ -41,6 +41,29 @@ const run = transport => fetchNaturalEvents({
   fetchHkoWarningsFn: async () => ({ warnings: [], dataAvailable: true, sourceDecision: { status: 'used' } }),
 });
 
+test('late EONET headers leave progressing body time within the shared budget', { timeout: 25_000 }, async t => {
+  const body = JSON.stringify({ events: [event] });
+  const timers = [];
+  const server = createServer((_req, res) => {
+    timers.push(setTimeout(() => { res.writeHead(200); res.write(body.slice(0, 20)); }, 12_900));
+    timers.push(setTimeout(() => res.end(body.slice(20)), 16_000));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => { timers.forEach(clearTimeout); server.closeAllConnections(); server.close(); });
+  const transport = fixture((source, attempt, options) => {
+    if (source !== 'eonet') return;
+    if (attempt === 1) throw dualFamilyFailure();
+    return fetch(`http://127.0.0.1:${server.address().port}`, options);
+  });
+  const started = performance.now();
+  const result = await run(transport);
+  assert.ok(result.events.some(item => item.id === event.id));
+  assert.equal(result._eonetFailed, false);
+  assert.ok(performance.now() - started < 20_000);
+  assert.equal(transport.calls.get('eonet'), 2);
+});
+
 function dualFamilyFailure() {
   return new TypeError('fetch failed', { cause: Object.assign(new AggregateError([
     Object.assign(new Error(), { code: 'ETIMEDOUT', syscall: 'connect', address: '127.0.0.1' }),

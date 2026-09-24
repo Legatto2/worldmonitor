@@ -8,6 +8,21 @@ import {
 
 const NOW = Date.parse('2026-09-17T06:00:00Z');
 const HOUR = 3_600_000;
+
+test('EONET survives nine-hour freshness with a fixed eighteen-hour expiry independently of GDACS', async () => {
+  const first = await run();
+  assert.equal(first._sourceSnapshots.eonet.retainedUntil, NOW + 18 * HOUR);
+  assert.equal(first._sourceSnapshots['gdacs:FL'].retainedUntil, NOW + 9 * HOUR);
+  const retained = await run({ previousSources: first._sourceSnapshots, now: NOW + 10 * HOUR, failures: ['eonet'], types: { EQ: [feature('EQ', 2)] } });
+  assert.ok(retained.events.some(event => event.id === 'eonet-volcano'));
+  assert.ok(retained.events.some(event => event.id === 'gdacs-EQ-2'));
+  assert.equal(retained.fetchedAt, NOW);
+  const repeated = await run({ previousSources: retained._sourceSnapshots, now: NOW + 17 * HOUR, failures: ['eonet'] });
+  assert.deepEqual(repeated._sourceSnapshots.eonet, first._sourceSnapshots.eonet);
+  const expired = await run({ previousSources: repeated._sourceSnapshots, now: NOW + 18 * HOUR, failures: ['eonet'] });
+  assert.equal(expired._sourceSnapshots.eonet, null);
+  assert.ok(!expired.events.some(event => event.id === 'eonet-volcano'));
+});
 const eonet = [{
   id: 'eonet-volcano', title: 'Volcano', categories: [{ id: 'volcanoes' }],
   geometry: [{ type: 'Point', coordinates: [10, 20], date: new Date(NOW).toISOString() }],
