@@ -1,0 +1,140 @@
+#shodan-chip {
+  position: fixed;
+  bottom: 6rem;
+  right: 1.2rem;
+  z-index: 61;
+  border: 1px solid #f0b65a80;
+  background: #101a22ed;
+  color: #f0b65a;
+  border-radius: 5px;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+  font: 600 12px monospace;
+}
+#shodan-panel {
+  position: fixed;
+  right: 1.2rem;
+  top: 6rem;
+  width: min(380px, calc(100vw - 2.4rem));
+  max-height: calc(100vh - 14rem);
+  overflow-y: auto;
+  z-index: 180;
+  box-sizing: border-box;
+  padding: 18px;
+  background: #101a22f5;
+  border: 1px solid #f0b65a80;
+  border-radius: 8px;
+  color: #e3eaf0;
+  font:
+    13px/1.5 system-ui,
+    sans-serif;
+  box-shadow: 0 12px 40px #0008;
+}
+#shodan-panel[hidden] {
+  display: none;
+}
+#shodan-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: -18px;
+  background: #101a22;
+  padding: 10px 0;
+  z-index: 1;
+}
+#shodan-panel h2 {
+  margin: 0;
+  color: #f0b65a;
+  font: 600 16px monospace;
+  letter-spacing: 2px;
+}
+#shodan-panel label {
+  display: block;
+  margin: 10px 0;
+}
+#shodan-panel input[type='text'],
+#shodan-panel select {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 5px;
+  padding: 9px;
+  background: #071018;
+  border: 1px solid #657987;
+  border-radius: 4px;
+  color: #fff;
+}
+#shodan-panel button {
+  background: #243746;
+  color: #fff;
+  border: 1px solid #637989;
+  border-radius: 4px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+#shodan-panel button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+#shodan-panel button:focus-visible,
+#shodan-chip:focus-visible {
+  outline: 2px solid #f0b65a;
+  outline-offset: 3px;
+}
+#shodan-panel .shodan-note {
+  color: #b3c3cc;
+  font-size: 11px;
+}
+#shodan-panel .shodan-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+#shodan-panel article {
+  border-top: 1px solid #45535f;
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+#shodan-panel article h3 {
+  color: #f0b65a;
+  margin: 0 0 8px;
+}
+#shodan-panel article p {
+  margin: 4px 0;
+}
+#shodan-panel [hidden] {
+  display: none !important;
+}
+#shodan-panel a {
+  color: #79d9ef;
+}
+#shodan-panel h4 {
+  margin: 8px 0;
+}
+#shodan-panel article button {
+  margin: 4px 6px 4px 0;
+}
+#shodan-panel [data-player] {
+  border: 1px solid #53c9de;
+  padding: 10px;
+  border-radius: 5px;
+  margin-top: 12px;
+}
+#shodan-panel [data-player] img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  background: #000;
+}
+#shodan-panel [aria-pressed='true'] {
+  border-color: #f0b65a;
+  color: #f0b65a;
+}
+body.ui-clean-view #shodan-chip,
+body.recording-mode #shodan-chip,
+body.cockpit-mode #shodan-chip,
+body.scene-playback-mode #shodan-chip {
+  display: none;
+}

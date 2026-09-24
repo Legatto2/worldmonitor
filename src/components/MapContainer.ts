@@ -5,6 +5,7 @@
  * Supports an optional 3D globe mode (globe.gl) selectable from Settings.
  */
 import { isMobileDevice } from '@/utils';
+import { UnifiedGlobeWorkspace } from './UnifiedGlobeWorkspace';
 import { markLcpDebug } from '@/utils/lcp-debug';
 import {
   isLayerToggleAllowed,
@@ -165,6 +166,7 @@ type CIIScore = { code: string; score: number; level: string };
  * based on device capabilities
  */
 export class MapContainer {
+  private unifiedWorkspace: UnifiedGlobeWorkspace | null = null;
   private container: HTMLElement;
   private isMobile: boolean;
   private deckGLMap: DeckGLMap | null = null;
@@ -298,6 +300,7 @@ export class MapContainer {
     // init() attaches the resize observer synchronously (before its first await),
     // so the constructor does not need to start it separately.
     void this.init();
+    this.unifiedWorkspace = UnifiedGlobeWorkspace.create(() => this.getCenter(), center => { this.setCenter(center.lat,center.lon,center.zoom); });
   }
 
   private hasWebGLSupport(): boolean {
@@ -996,6 +999,7 @@ export class MapContainer {
   }
 
   public setCenter(lat: number, lon: number, zoom?: number): number {
+    this.unifiedWorkspace?.focus({lat,lon,zoom});
     const viewportActionToken = ++this.viewportActionToken;
     if (!this.isViewportRendererReady()) {
       this.pendingCenter = { lat, lon, zoom, actionToken: viewportActionToken };
@@ -1066,6 +1070,7 @@ export class MapContainer {
   // ─── Data setters ────────────────────────────────────────────────────────────
 
   public setEarthquakes(earthquakes: Earthquake[]): void {
+    this.unifiedWorkspace?.setDataset('earthquakes',earthquakes);
     this.cachedEarthquakes = earthquakes;
     if (this.useGlobe) { this.globeMap?.setEarthquakes(earthquakes); return; }
     if (this.useDeckGL) { this.deckGLMap?.setEarthquakes(earthquakes); } else { this.svgMap?.setEarthquakes(earthquakes); }
@@ -1107,6 +1112,7 @@ export class MapContainer {
   }
 
   public setOutages(outages: InternetOutage[]): void {
+    this.unifiedWorkspace?.setDataset('outages',outages);
     this.cachedOutages = outages;
     if (this.useGlobe) { this.globeMap?.setOutages(outages); return; }
     if (this.useDeckGL) { this.deckGLMap?.setOutages(outages); } else { this.svgMap?.setOutages(outages); }
@@ -1186,6 +1192,7 @@ export class MapContainer {
   }
 
   public setMilitaryFlights(flights: MilitaryFlight[], clusters: MilitaryFlightCluster[] = []): void {
+    this.unifiedWorkspace?.setDataset('military',flights);
     this.cachedMilitaryFlights = flights;
     this.cachedMilitaryFlightClusters = clusters;
     if (this.useGlobe) { this.globeMap?.setMilitaryFlights(flights); return; }
@@ -1200,12 +1207,14 @@ export class MapContainer {
   }
 
   public setNaturalEvents(events: NaturalEvent[]): void {
+    this.unifiedWorkspace?.setDataset('natural',events);
     this.cachedNaturalEvents = events;
     if (this.useGlobe) { this.globeMap?.setNaturalEvents(events); return; }
     if (this.useDeckGL) { this.deckGLMap?.setNaturalEvents(events); } else { this.svgMap?.setNaturalEvents(events); }
   }
 
   public setFires(fires: FireMarker[]): void {
+    this.unifiedWorkspace?.setDataset('fires',fires);
     this.cachedFires = fires;
     if (this.useGlobe) { this.globeMap?.setFires(fires); return; }
     if (this.useDeckGL) {
@@ -1299,6 +1308,7 @@ export class MapContainer {
   }
 
   public setNewsLocations(data: NewsLocationMarker[]): void {
+    this.unifiedWorkspace?.setDataset('news',data);
     this.cachedNewsLocations = data;
     if (this.useGlobe) { this.globeMap?.setNewsLocations(data); return; }
     if (this.useDeckGL) {
@@ -1766,6 +1776,7 @@ export class MapContainer {
   }
 
   public destroy(): void {
+    this.unifiedWorkspace?.destroy();
     this.destroyed = true;
     this.container.removeEventListener('pointerdown', this.invalidateViewportAuthority);
     this.container.removeEventListener('wheel', this.invalidateViewportAuthority);
