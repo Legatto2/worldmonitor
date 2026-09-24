@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { __testing__ } from '../api/health.js';
 import { findOperationalProblems } from '../scripts/check-seed-freshness.mjs';
 
@@ -7,6 +8,14 @@ const NAME = 'techEventsSeeder';
 const KEY = 'research:tech-events:v1';
 const META = 'seed-meta:research:tech-events:seeder';
 const NOW = Date.parse('2027-01-01T12:00:00Z');
+
+test('operator health uses the same tech-events staleness limit', () => {
+  const source = readFileSync(new URL('../api/seed-health.js', import.meta.url), 'utf8');
+  const entry = source.match(/'research:tech-events-seeder':\s*\{\s*key:\s*'([^']+)',\s*intervalMin:\s*(\d+)/);
+  assert.ok(entry);
+  assert.equal(entry[1], __testing__.SEED_META[NAME].key);
+  assert.equal(Number(entry[2]) * 2, __testing__.SEED_META[NAME].maxStaleMin);
+});
 
 test('compact health alerts on an overdue tech-events seeder independently of the relay', () => {
   assert.equal(__testing__.STANDALONE_KEYS[NAME], KEY);
