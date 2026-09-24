@@ -198,3 +198,35 @@ describe('get_news_intelligence credibility normalization (#6597)', () => {
     );
   });
 });
+
+describe('get_news_intelligence corroboration (#6419)', () => {
+  it('derives each top story state from its outlet names', () => {
+    const data = envelope([
+      story({ primaryTitle: 'one wire', sources: ['Reuters World', 'Reuters US'] }),
+      story({ primaryTitle: 'aggregators', sources: ['The Verge', 'Hacker News'] }),
+      story({ primaryTitle: 'mixed', sources: ['The Verge', 'BBC World'] }),
+      story({ primaryTitle: 'legacy' }),
+      story({ primaryTitle: 'malformed', sources: 'Reuters' }),
+    ]);
+
+    newsTool._postFilter(data, {});
+
+    assert.deepEqual(data.insights.topStories.map(entry => entry.corroboration), [
+      { state: 'single-publisher', publishers: 1 },
+      { state: 'tier4-only', publishers: 2 },
+      { state: 'corroborated', publishers: 2 },
+      { state: 'unknown', publishers: null },
+      { state: 'unknown', publishers: null },
+    ]);
+  });
+
+  it('trusts the digest publisher count over the labels that survived the category cap', () => {
+    const data = envelope([
+      story({ primaryTitle: 'capped', sources: ['Reuters World'], corroborationCount: 3 }),
+    ]);
+
+    newsTool._postFilter(data, {});
+
+    assert.deepEqual(data.insights.topStories[0].corroboration, { state: 'corroborated', publishers: 3 });
+  });
+});

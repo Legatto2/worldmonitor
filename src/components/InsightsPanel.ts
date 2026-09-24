@@ -10,6 +10,7 @@ import { getTheaterPostureSummaries } from '@/services/military-surge';
 import { getCachedPosture } from '@/services/cached-theater-posture';
 import { isMobileDevice } from '@/utils';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
+import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromStory } from '@/utils/corroboration-flag';
 import { collectBriefCitationSources, collectBriefSources, normalizeCachedBriefSources, renderBriefSourcesFooter, type BriefSource } from '@/utils/brief-sources';
 import { formatIntelBrief } from '@/utils/format-intel-brief';
 import { SITE_VARIANT } from '@/config';
@@ -681,6 +682,8 @@ export class InsightsPanel extends Panel {
       } else if (storyPublishers >= 2) {
         badges.push(`<span class="insight-badge multi">${t('components.insights.sources', { count: storyPublishers })}</span>`);
       }
+      const storyFlag = corroborationFlagHtml(assessCorroboration(evidenceFromStory(story)));
+      if (storyFlag) badges.push(storyFlag);
 
       if (story.isAlert) {
         badges.push(`<span class="insight-badge alert">⚠ ${t('components.insights.alert')}</span>`);
@@ -818,6 +821,8 @@ export class InsightsPanel extends Panel {
       } else if (clusterPublishers >= 2) {
         badges.push(`<span class="insight-badge multi">${t('components.insights.sources', { count: clusterPublishers })}</span>`);
       }
+      const clusterFlag = corroborationFlagHtml(assessCorroboration(evidenceFromCluster(cluster)));
+      if (clusterFlag) badges.push(clusterFlag);
 
       if (cluster.velocity && cluster.velocity.level !== 'normal') {
         const velIcon = cluster.velocity.trend === 'rising' ? '↑' : '';

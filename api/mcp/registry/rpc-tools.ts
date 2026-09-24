@@ -29,6 +29,14 @@ import { McpSourceUnavailableError } from '../source-unavailable';
 import { normalizeCountry } from '../../../server/_shared/intel-history-client';
 import { normalizePassengerCount } from '../../../server/_shared/passenger-count';
 import {
+  CORROBORATION_OUTPUT_SCHEMA,
+  assessCorroboration,
+  evidenceFromItem,
+  evidenceFromStory,
+  toCorroborationJson,
+  type CorroborationJson,
+} from '../../../server/_shared/corroboration';
+import {
   collectInsightSources,
   INSIGHTS_MAX_SERVEABLE_AGE_MS,
   insightsSnapshotRejection,
@@ -86,6 +94,7 @@ type McpBriefGroundingStory = {
   url?: string;
   publishedAt?: string;
   corroborationCount: number;
+  corroboration: CorroborationJson;
   mentionCount?: number;
   storyPhase?: string;
 };
@@ -168,10 +177,12 @@ function collectBriefGroundingStories(
     const url = normalized.url.length <= MAX_COUNTRY_BRIEF_GROUNDING_URL_LENGTH
       ? normalized.url
       : undefined;
+    const corroborationCount = Number.isFinite(item.corroborationCount) ? item.corroborationCount as number : 0;
     const story: McpBriefGroundingStory = {
       title,
       source,
-      corroborationCount: Number.isFinite(item.corroborationCount) ? item.corroborationCount as number : 0,
+      corroborationCount,
+      corroboration: toCorroborationJson(assessCorroboration(evidenceFromItem({ source, corroborationCount }))),
     };
     if (url) story.url = url;
     if (publishedAt) story.publishedAt = publishedAt;
@@ -205,6 +216,7 @@ type McpWorldBriefStory = {
   entityCorroboration?: boolean;
   sourceTier?: number;
   sources?: string[];
+  corroboration: CorroborationJson;
 };
 
 // The per-story outlet list is the only unbounded sub-array on this payload, so
@@ -219,7 +231,11 @@ function projectStoryCorroboration(title: string, story: Record<string, unknown>
   const finite = (value: unknown): number | undefined => (
     typeof value === 'number' && Number.isFinite(value) ? value : undefined
   );
-  const projected: McpWorldBriefStory = { title };
+  const evidence = evidenceFromStory(story);
+  const projected: McpWorldBriefStory = {
+    title,
+    corroboration: toCorroborationJson(assessCorroboration(evidence)),
+  };
   const sourceCount = finite(story.sourceCount);
   const uniqueSourceCount = finite(story.uniqueSourceCount);
   const corroborationSourceCount = finite(story.corroborationSourceCount);
@@ -229,11 +245,7 @@ function projectStoryCorroboration(title: string, story: Record<string, unknown>
   if (corroborationSourceCount !== undefined) projected.corroborationSourceCount = corroborationSourceCount;
   if (typeof story.entityCorroboration === 'boolean') projected.entityCorroboration = story.entityCorroboration;
   if (sourceTier !== undefined) projected.sourceTier = sourceTier;
-  if (Array.isArray(story.sources)) {
-    projected.sources = story.sources
-      .filter((name): name is string => typeof name === 'string' && name.length > 0)
-      .slice(0, MAX_WORLD_BRIEF_STORY_OUTLETS);
-  }
+  if (Array.isArray(story.sources)) projected.sources = evidence.labels.slice(0, MAX_WORLD_BRIEF_STORY_OUTLETS);
   return projected;
 }
 
@@ -1332,7 +1344,7 @@ export const RPC_TOOLS: ToolDef[] = [
   {
     name: 'get_world_brief',
     _outputBudgetBytes: 65536,
-    description: 'Citation-grounded world intelligence brief from the same precomputed news:insights:v1 snapshot used by the dashboard. The insights seeder applies corroboration, citation, and hallucination gates before publishing; this tool reads that accepted result without a request-time LLM call. The optional geo_context field is retained for client compatibility and does not alter the seeded global snapshot. Each headline is paired with an index-aligned topStories entry carrying the story corroboration evidence published by its snapshot: uniqueSourceCount (distinct outlets), corroborationSourceCount, entityCorroboration, sourceTier, and the outlet names themselves. Legacy snapshots omit corroboration fields they did not publish. When the seeder has not published inside the 60-minute freshness window the last-known-good snapshot is served rather than failing, flagged by stale:true with ageMinutes — the content is unchanged and still fully gated, so weigh its age rather than discarding it. Serving is capped at 3h old; past that, and for a snapshot that is absent or broken rather than merely old, the source is reported unavailable.',
+    description: 'Citation-grounded world intelligence brief from the same precomputed news:insights:v1 snapshot used by the dashboard. The insights seeder applies corroboration, citation, and hallucination gates before publishing; this tool reads that accepted result without a request-time LLM call. The optional geo_context field is retained for client compatibility and does not alter the seeded global snapshot. Each headline is paired with an index-aligned topStories entry carrying the story corroboration evidence published by its snapshot: uniqueSourceCount (distinct outlets), corroborationSourceCount, entityCorroboration, sourceTier, the outlet names themselves, and corroboration, derived from those outlet names; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. Legacy snapshots omit corroboration fields they did not publish. When the seeder has not published inside the 60-minute freshness window the last-known-good snapshot is served rather than failing, flagged by stale:true with ageMinutes — the content is unchanged and still fully gated, so weigh its age rather than discarding it. Serving is capped at 3h old; past that, and for a snapshot that is absent or broken rather than merely old, the source is reported unavailable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1363,6 +1375,7 @@ export const RPC_TOOLS: ToolDef[] = [
                 items: { type: 'string' },
                 description: 'Outlet names that carried the story, tier-sorted and deduped, capped at 12. Distinct from this tool top-level sources field, which carries citation records rather than outlet names. Omitted when unavailable.',
               },
+              corroboration: CORROBORATION_OUTPUT_SCHEMA,
             },
           },
         },
@@ -1445,7 +1458,7 @@ export const RPC_TOOLS: ToolDef[] = [
     // Two downstream fetches (brief + news digest for grounding).
     _weight: 3,
     _outputBudgetBytes: 65536,
-    description: 'AI-generated per-country intelligence brief. Produces an LLM-analyzed geopolitical and economic assessment for the given country. Supports analytical frameworks for structured lenses. Returns groundingStories alongside sources: the digest articles used to ground the brief, each with corroborationCount, mentionCount, and lifecycle storyPhase, so an agent can weigh how well-corroborated the underlying reporting is. When the news digest is serving retained (stale) content, that grounding is DROPPED and the brief is generated without it; pass allow_stale=true to ground on the retained snapshot instead. Either way the digestCoverage block reports what the grounding was.',
+    description: 'AI-generated per-country intelligence brief. Produces an LLM-analyzed geopolitical and economic assessment for the given country. Supports analytical frameworks for structured lenses. Returns groundingStories alongside sources: the digest articles used to ground the brief, each with corroborationCount, corroboration, mentionCount, and lifecycle storyPhase, so an agent can weigh how well-corroborated the underlying reporting is; corroboration.state (single-publisher, tier4-only, corroborated, unknown) describes coverage, not accuracy. When the news digest is serving retained (stale) content, that grounding is DROPPED and the brief is generated without it; pass allow_stale=true to ground on the retained snapshot instead. Either way the digestCoverage block reports what the grounding was.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1518,6 +1531,7 @@ export const RPC_TOOLS: ToolDef[] = [
               url: { type: 'string' },
               publishedAt: { type: 'string' },
               corroborationCount: { type: 'number', description: 'Distinct outlets carrying this story at digest time.' },
+              corroboration: CORROBORATION_OUTPUT_SCHEMA,
               mentionCount: { type: 'number', description: 'Times the story has been seen across digest cycles since firstSeen.' },
               storyPhase: {
                 type: 'string',

@@ -5,6 +5,7 @@ import { THREAT_PRIORITY } from '@/services/threat-classifier';
 import { formatTime, getCSSColor } from '@/utils';
 import { escapeHtml, sanitizeUrl, unsafeRawHtml } from '@/utils/sanitize';
 import { computeNewSinceVisit } from '@/utils/new-since-visit';
+import { assessCorroboration, corroborationFlagHtml, evidenceFromCluster, evidenceFromItem } from '@/utils/corroboration-flag';
 import { analysisWorker, enrichWithVelocityML, getClusterAssetContext, MAX_DISTANCE_KM, activityTracker, generateSummary, translateText, preloadRelatedAssetTables } from '@/services';
 import { SITE_VARIANT } from '@/config';
 import { t, getCurrentLanguage, getCurrentLanguageTag } from '@/services/i18n';
@@ -557,6 +558,7 @@ export class NewsPanel extends Panel {
           ${renderCredibilityBadge(item.source, item)}
           ${provenance.riskBadge}
           ${provenance.facts}
+          ${corroborationFlagHtml(assessCorroboration(evidenceFromItem(item)))}
           ${item.lang && item.lang !== getCurrentLanguage() ? `<span class="lang-badge">${item.lang.toUpperCase()}</span>` : ''}
           ${item.storyMeta?.phase === 'breaking' ? '<span class="phase-badge breaking">BREAKING</span>' : ''}
           ${item.storyMeta?.phase === 'developing' ? `<span class="phase-badge developing">DEVELOPING${item.storyMeta.mentionCount > 1 ? ` ×${item.storyMeta.mentionCount}` : ''}</span>` : ''}
@@ -817,6 +819,7 @@ export class NewsPanel extends Panel {
           ${langBadge}
           ${newTag}
           ${sourceBadge}
+          ${corroborationFlagHtml(assessCorroboration(evidenceFromCluster(cluster)))}
           ${velocityBadge}
           ${sentimentBadge}
           ${cluster.isAlert ? '<span class="alert-tag">ALERT</span>' : ''}
