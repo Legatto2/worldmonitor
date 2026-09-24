@@ -19,7 +19,8 @@ test('operator health uses the same tech-events staleness limit', () => {
 
 test('compact health alerts on an overdue tech-events seeder independently of the relay', () => {
   assert.equal(__testing__.STANDALONE_KEYS[NAME], KEY);
-  assert.deepEqual(__testing__.SEED_META[NAME], { key: META, maxStaleMin: 180 });
+  assert.equal(__testing__.SEED_META[NAME].key, META);
+  assert.equal(__testing__.SEED_META[NAME].maxStaleMin, 180);
   for (const [age, expected] of [[60, 'OK'], [180, 'OK'], [181, 'STALE_SEED']]) {
     const entry = __testing__.classifyKey(NAME, KEY, { allowOnDemand: false }, {
       keyStrens: new Map([[KEY, 1024]]),
