@@ -320,7 +320,11 @@ function getVesselTypeFromAis(shipType: number): MilitaryVesselType | undefined 
   // 50-59 = Special craft
   // 55 = Law enforcement
 
-  if (shipType === 35) return 'destroyer'; // Generic military
+  // 35 reports generic military ACTIVITY, not a hull class (#8611). Returning a
+  // class here labelled every unidentified ship a destroyer. 'unknown' still
+  // counts as a military signal for the tracking gate in processAisPosition,
+  // and aisShipType carries the supported 'Military Ops' fact to the UI.
+  if (shipType === 35) return 'unknown';
   if (shipType === 55) return 'patrol'; // Law enforcement/coast guard
   if (shipType >= 50 && shipType <= 59) return 'special';
 
