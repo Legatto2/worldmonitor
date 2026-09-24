@@ -178,3 +178,28 @@ test('all GDACS type requests can fail without discarding valid uncapped last-go
   assert.equal(second._sourceSnapshots['gdacs:EQ'].records.length, 101);
   assert.equal(naturalEventsAfterPublish(second).freshnessMetaPatch.failedSources.length, 6);
 });
+
+test('failure logs report fixed retention clocks without changing published health', async (t) => {
+  const first = await run();
+  const retained = await run({ previousSources: first._sourceSnapshots, now: NOW + HOUR, failures: ['eonet'] });
+  const expired = await run({ previousSources: first._sourceSnapshots, now: NOW + 9 * HOUR, failures: ['eonet'] });
+  const warnings = [];
+  t.mock.method(console, 'warn', message => warnings.push(message));
+  const before = structuredClone(retained);
+  const result = naturalEventsAfterPublish(retained);
+  const prefix = '[natural-events] failed source health=';
+  const logged = JSON.parse(warnings.find(message => message.startsWith(prefix)).slice(prefix.length));
+  assert.deepEqual(Object.keys(logged), ['eonet']);
+  assert.deepEqual(logged.eonet, { ...result.freshnessMetaPatch.sourceHealth.eonet, remainingRetentionMs: 8 * HOUR });
+  assert.deepEqual(retained, before);
+  assert.equal('remainingRetentionMs' in result.freshnessMetaPatch.sourceHealth.eonet, false);
+  warnings.length = 0;
+  naturalEventsAfterPublish(expired);
+  const unavailable = JSON.parse(warnings.find(message => message.startsWith(prefix)).slice(prefix.length));
+  assert.equal(unavailable.eonet.status, 'unavailable');
+  assert.equal(unavailable.eonet.lastSuccessAt, null);
+  assert.equal(unavailable.eonet.remainingRetentionMs, null);
+  warnings.length = 0;
+  naturalEventsAfterPublish(first);
+  assert.deepEqual(warnings, []);
+});

@@ -481,6 +481,7 @@
       "scripts/_seed-envelope-source.mjs",
       "scripts/_seed-utils.mjs",
       "scripts/lib/llm-telemetry.cjs",
+      "scripts/natural/source-request-diagnostics.mjs",
       "scripts/natural/western-pacific-cyclones.mjs",
       "scripts/nixpacks.toml",
       "scripts/package-lock.json",

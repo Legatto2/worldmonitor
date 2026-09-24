@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { getDefaultAutoSelectFamily, getDefaultAutoSelectFamilyAttemptTimeout, isIP } from 'node:net';
 import { Agent } from 'undici';
+import { withSourceRequestDiagnostics } from './natural/source-request-diagnostics.mjs';
 
 import {
   loadEnvFile,
@@ -187,7 +188,7 @@ async function fetchEventSourceJson(source, url, fetchFn) {
   const deadline = started + SOURCE_REQUEST_BUDGET_MS;
   let attempt = 0;
   let ipv4Retry = false;
-  return withRetry(async () => {
+  return withRetry(() => withSourceRequestDiagnostics(async progress => {
     const remaining = Math.floor(deadline - performance.now());
     if (remaining <= 0) throw Object.assign(new Error(`${source} request budget exhausted`), { nonRetryable: true });
     attempt++;
@@ -230,7 +231,7 @@ async function fetchEventSourceJson(source, url, fetchFn) {
           details = ' details={"unavailable":true}';
         }
       }
-      const error = Object.assign(new Error(`${source} ${stage} ${kind} attempt=${attempt} elapsedMs=${Math.round(finished - started)} attemptElapsedMs=${Math.round(finished - attemptStarted)}${phaseTimings}${details}`), {
+      const error = Object.assign(new Error(`${source} ${stage} ${kind} attempt=${attempt} elapsedMs=${Math.round(finished - started)} attemptElapsedMs=${Math.round(finished - attemptStarted)}${phaseTimings} progress=${JSON.stringify(progress())}${details}`), {
         nonRetryable: stage === 'http' ? cause.nonRetryable : !transport,
         retryAfterMs: cause.retryAfterMs,
       });
@@ -239,7 +240,7 @@ async function fetchEventSourceJson(source, url, fetchFn) {
     } finally {
       await dispatcher?.destroy();
     }
-  }, 1, 500);
+  }), 1, 500);
 }
 
 async function fetchEonet(days, fetchFn = globalThis.fetch, now = Date.now()) {
@@ -1056,6 +1057,15 @@ export function naturalEventsAfterPublish(data) {
   if (!failedSources.length) return { freshnessMetaPatch: patch };
 
   console.warn(`[natural-events] DEGRADED: ${failedSources.join(', ')}`);
+  const failedSourceHealth = Object.fromEntries(failedSources.filter(source => sourceHealth[source]).map(source => {
+    const health = sourceHealth[source];
+    return [source, {
+      ...health,
+      remainingRetentionMs: health.retainedUntil === null ? null
+        : Math.max(0, health.retainedUntil - (health.lastAttemptAt ?? Date.now())),
+    }];
+  }));
+  if (Object.keys(failedSourceHealth).length) console.warn(`[natural-events] failed source health=${JSON.stringify(failedSourceHealth)}`);
   if (nhcFailed) Object.assign(patch, {
     errorCode: nhc.errorCode,
     skipReason: 'nhc-required-point-coverage-incomplete',

@@ -431,3 +431,35 @@ test('request failures omit unobserved phase timings and successful responses ad
   assert.equal(result._sourceSnapshots.eonet.fetchedAt, NOW);
   assert.doesNotMatch(logs.join('\n'), /headersElapsedMs|bodyElapsedMs|attempt=2/);
 });
+
+test('failed native attempts log isolated wire progress without logging response content', async t => {
+  const logs = [];
+  t.mock.method(console, 'warn', (...args) => logs.push(args.join(' ')));
+  t.mock.method(console, 'log', (...args) => logs.push(args.join(' ')));
+  const timeout = AbortSignal.timeout;
+  t.mock.method(AbortSignal, 'timeout', () => timeout(100));
+  const body = '{"private":"secret';
+  const server = createServer((_req, res) => { res.writeHead(200); res.write(body); });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const transport = fixture((source, _attempt, options) => source === 'eonet'
+    ? fetch(`http://127.0.0.1:${server.address().port}/private?token=secret`, options) : undefined);
+  const result = await run(transport);
+  const progress = logs.flatMap(line => [...line.matchAll(/ progress=(\{[^}]+\})/g)].map(match => JSON.parse(match[1])));
+  assert.equal(progress.length, 2);
+  for (const item of progress) {
+    assert.equal(item.observed, true);
+    assert.equal(item.requestCount, 1);
+    assert.equal(item.requestSendObserved, true);
+    assert.equal(item.responseHeadersObserved, true);
+    assert.equal(item.wireBodyBytes, Buffer.byteLength(body));
+    assert.equal(item.wireBodyComplete, false);
+    assert.ok(item.firstBodyByteMs >= 0);
+    assert.ok(item.lastBodyByteMs >= item.firstBodyByteMs);
+  }
+  assert.doesNotMatch(logs.join('\n'), /private|secret|127\.0\.0\.1/);
+  assert.equal(transport.calls.get('eonet'), 2);
+  for (const [source, count] of transport.calls) if (source !== 'eonet') assert.equal(count, 1, source);
+  assert.deepEqual(naturalEventsAfterPublish(result).freshnessMetaPatch.failedSources, ['eonet']);
+});
