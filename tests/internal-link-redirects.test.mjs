@@ -276,6 +276,24 @@ function* corpusHrefs(outDir) {
  * build-time link rule can see them.
  */
 function authoredLinkTargets(source) {
+  // Track the opening marker so shorter or different fences inside an example
+  // cannot expose its contents. An unclosed fence consumes the remaining lines.
+  let fence = null;
+  const prose = source.split(/\r?\n/).map((line) => {
+    if (fence) {
+      if (new RegExp(`^ {0,3}${fence[0]}{${fence.length},}[ \\t]*$`).test(line)) fence = null;
+      return '';
+    }
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (opening && (opening[1][0] === '~' || !opening[2].includes('`'))) {
+      fence = opening[1];
+      return '';
+    }
+    return line;
+  }).join('\n');
+  // Inline code uses matching backtick runs, including across line breaks.
+  // Leave unmatched runs alone: they do not turn the rest of a paragraph into code.
+  source = prose.replace(/(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g, ' ');
   return [
     ...[...source.matchAll(/\]\((https?:\/\/[^)\s]+|\/[^)\s]+)\)/g)].map((match) => match[1]),
     ...[...source.matchAll(/<a\b[^>]*\bhref="([^"]+)"/g)].map((match) => decodeHtmlAttribute(match[1])),
@@ -377,6 +395,32 @@ async function corpusFixture() {
   };
   return fixture;
 }
+
+it('excludes code examples while preserving authored links', () => {
+  const realLinks = '[Actual page](/docs/algorithms) <a href="/countries/norway/">Norway</a>';
+  const example = '[Example](/not-a-page) <a href="/docs">example</a>';
+  for (const code of [
+    `\`\`\`md\n${example}\n\`\`\``,
+    `~~~html\n${example}\n~~~`,
+    `  \`\`\`\`md\n\`\`\`\n${example}\n\`\`\`\`\``,
+    `\`${example}\``,
+    `\`\`${example} with a \` backtick\`\``,
+    `\`a multiline\n${example}\``,
+  ]) {
+    assert.deepEqual(authoredLinkTargets(`${realLinks}\n${code}\n${realLinks}`), [
+      '/docs/algorithms', '/docs/algorithms', '/countries/norway/', '/countries/norway/',
+    ], code);
+  }
+  assert.deepEqual(authoredLinkTargets(`${realLinks}\n\`\`\`md\n${example}`), [
+    '/docs/algorithms', '/countries/norway/',
+  ], 'an unclosed fence runs to the end of the document');
+  assert.deepEqual(authoredLinkTargets(`An unmatched \` leaves ${realLinks}`), [
+    '/docs/algorithms', '/countries/norway/',
+  ], 'an unmatched inline delimiter is prose');
+  assert.deepEqual(authoredLinkTargets(`Unmatched \`\n\n${realLinks}\n\nAnother \``), [
+    '/docs/algorithms', '/countries/norway/',
+  ], 'inline code cannot cross a paragraph boundary');
+});
 
 describe('internal links never redirect or 404 (#8603)', () => {
   after(() => {
